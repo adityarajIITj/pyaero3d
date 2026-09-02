@@ -65,6 +65,10 @@ class FlightYokeController:
         self.base.accept("2", lambda: self.on_spawn_drone() if self.on_spawn_drone else None)
         self.base.accept("3", lambda: self.on_spawn_cargo() if self.on_spawn_cargo else None)
         self.base.accept("4", lambda: self.on_spawn_rocket() if self.on_spawn_rocket else None)
+        self.base.accept("5", lambda: self.on_spawn_cannon() if self.on_spawn_cannon else None)
+        self.base.accept("6", lambda: self.on_spawn_glider() if self.on_spawn_glider else None)
+        self.base.accept("7", lambda: self.on_spawn_satellite() if self.on_spawn_satellite else None)
+        self.base.accept("8", lambda: self.on_spawn_sphere() if self.on_spawn_sphere else None)
         self.base.accept("f", lambda: self.on_trigger_breakup() if self.on_trigger_breakup else None)
         self.base.accept("u", lambda: self.on_toggle_units() if self.on_toggle_units else None)
         self.base.accept("h", lambda: self.on_toggle_help() if self.on_toggle_help else None)
@@ -79,35 +83,50 @@ class FlightYokeController:
             return
 
         row = self.buffer.data[idx]
+        ent_type = int(row[StateIdx.ENTITY_TYPE])
 
         # 1. Pitch Elevator Control (W = Nose Down, S = Nose Up)
         target_elev = 0.0
         if self.keys["s"]: target_elev += 1.0
         if self.keys["w"]: target_elev -= 1.0
-        # Smooth lerp
-        row[StateIdx.CTRL_ELEVATOR] += (target_elev - row[StateIdx.CTRL_ELEVATOR]) * min(1.0, 10.0 * dt)
+        row[StateIdx.CTRL_ELEVATOR] += (target_elev - row[StateIdx.CTRL_ELEVATOR]) * min(1.0, 12.0 * dt)
 
         # 2. Roll Aileron Control (A = Roll Left, D = Roll Right)
         target_ail = 0.0
         if self.keys["d"]: target_ail += 1.0
         if self.keys["a"]: target_ail -= 1.0
-        row[StateIdx.CTRL_AILERON] += (target_ail - row[StateIdx.CTRL_AILERON]) * min(1.0, 10.0 * dt)
+        row[StateIdx.CTRL_AILERON] += (target_ail - row[StateIdx.CTRL_AILERON]) * min(1.0, 12.0 * dt)
 
         # 3. Yaw Rudder Control (Q = Yaw Left, E = Yaw Right)
         target_rud = 0.0
         if self.keys["e"]: target_rud += 1.0
         if self.keys["q"]: target_rud -= 1.0
-        row[StateIdx.CTRL_RUDDER] += (target_rud - row[StateIdx.CTRL_RUDDER]) * min(1.0, 8.0 * dt)
+        row[StateIdx.CTRL_RUDDER] += (target_rud - row[StateIdx.CTRL_RUDDER]) * min(1.0, 10.0 * dt)
 
-        # 4. Throttle Control (Shift = Throttle Up, Ctrl = Throttle Down)
-        thr_rate = 0.40 # 40% per second
+        # 4. Direct Aerodynamic Rate Stabilization
+        if ent_type in (EntityType.FIXED_WING_JET, EntityType.AIRFOIL_GLIDER):
+            desired_pitch = -row[StateIdx.CTRL_ELEVATOR] * 1.5
+            desired_roll = -row[StateIdx.CTRL_AILERON] * 2.8
+            desired_yaw = row[StateIdx.CTRL_RUDDER] * 0.9
+
+            row[StateIdx.WX] += (desired_pitch - row[StateIdx.WX]) * min(1.0, 12.0 * dt)
+            row[StateIdx.WZ] += (desired_roll - row[StateIdx.WZ]) * min(1.0, 12.0 * dt)
+            row[StateIdx.WY] += (desired_yaw - row[StateIdx.WY]) * min(1.0, 8.0 * dt)
+
+        # 5. Throttle Control (Shift = Throttle Up, Ctrl = Throttle Down)
+        thr_rate = 0.50 # 50% per second
         if self.keys["shift"]:
             row[StateIdx.THROTTLE] = min(1.0, row[StateIdx.THROTTLE] + thr_rate * dt)
         if self.keys["control"]:
             row[StateIdx.THROTTLE] = max(0.0, row[StateIdx.THROTTLE] - thr_rate * dt)
 
-        # 5. Wheel Brakes
+        # 6. Wheel Brakes / Airbrake
         if self.keys["space"]:
             row[StateIdx.SURFACE_FRICTION] = 0.85
+            if ent_type in (EntityType.FIXED_WING_JET, EntityType.AIRFOIL_GLIDER):
+                # Airbrake drag augmentation
+                row[StateIdx.CD] = 0.15
         else:
             row[StateIdx.SURFACE_FRICTION] = 0.03
+            if ent_type == EntityType.FIXED_WING_JET:
+                row[StateIdx.CD] = 0.024

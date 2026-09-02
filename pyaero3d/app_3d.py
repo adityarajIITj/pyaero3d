@@ -1,9 +1,11 @@
 """
 PyAero3D - 3D Panda3D Mountain Simulation & Multi-Vehicle Sandbox Application.
+Supports all 8 physical presets launched seamlessly from the XY Graph Studio or CLI.
 """
 
 import sys
 import numpy as np
+from typing import Optional, Dict, Any
 
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
@@ -13,11 +15,12 @@ from panda3d.core import (
     DirectionalLight,
     AmbientLight,
     NodePath,
+    LQuaternionf,
 )
 
 # Panda3D Window & Graphics Configuration
 load_prc_file_data("", """
-    window-title PyAero3D // Mountain World Simulation & Aerospace Sandbox
+    window-title PyAero3D // Mountain World Simulation & Multi-Scenario Sandbox (3D)
     win-size 1600 900
     sync-video #t
     show-frame-rate-meter #t
@@ -43,10 +46,29 @@ class PyAero3DSimulatorApp(ShowBase):
     Main 3D Desktop Simulation Application orchestrating Physics, Rendering, and Controls.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        scenario_idx: int = 1,
+        v0: Optional[float] = None,
+        theta: Optional[float] = None,
+        mass: Optional[float] = None,
+        cd: Optional[float] = None,
+        area: Optional[float] = None,
+        wind: Optional[float] = None,
+        thrust: Optional[float] = None,
+    ):
         super().__init__()
         self.disableMouse()
         self.setBackgroundColor(0.05, 0.05, 0.08, 1.0)
+
+        self.scenario_idx = scenario_idx
+        self.param_v0 = v0
+        self.param_theta = theta
+        self.param_mass = mass
+        self.param_cd = cd
+        self.param_area = area
+        self.param_wind = wind
+        self.param_thrust = thrust
 
         # Configure Camera Lens FOV
         self.camLens.setFov(75)
@@ -87,14 +109,18 @@ class PyAero3DSimulatorApp(ShowBase):
         self.cam_controller = FlightCameraController(self.camera)
 
         # 8. Visual Actor Nodes Mapping
-        self.actor_nodes = {}
+        self.actor_nodes: Dict[int, NodePath] = {}
         self.current_controlled_idx = 0
 
         # Connect yoke callbacks
-        self.yoke.on_spawn_jet = self.spawn_jet_on_runway
+        self.yoke.on_spawn_jet = self.spawn_fighter_jet_airborne
         self.yoke.on_spawn_drone = self.spawn_drone_mountain
         self.yoke.on_spawn_cargo = self.spawn_cargo_drop
-        self.yoke.on_spawn_rocket = self.spawn_rocket
+        self.yoke.on_spawn_rocket = self.spawn_rocket_launch
+        self.yoke.on_spawn_cannon = self.spawn_cannon_projectile
+        self.yoke.on_spawn_glider = self.spawn_airfoil_glider
+        self.yoke.on_spawn_satellite = self.spawn_orbital_satellite
+        self.yoke.on_spawn_sphere = self.spawn_bouncing_spheres
         self.yoke.on_cycle_cam = self._cycle_camera_mode
         self.yoke.on_trigger_breakup = self._trigger_manual_breakup
         self.yoke.on_toggle_units = self.hud.toggle_unit_system
@@ -104,8 +130,8 @@ class PyAero3DSimulatorApp(ShowBase):
         # Start Physics Engine Thread
         self.physics_thread.start()
 
-        # Spawn Initial Vehicle (Fighter Jet on Runway)
-        self.spawn_jet_on_runway()
+        # Spawn Active Scenario Preset
+        self._spawn_preset_scenario(self.scenario_idx)
 
         # Register Main Render Frame Task
         self.taskMgr.add(self._render_frame_update, "PyAero3D_RenderUpdate")
@@ -123,28 +149,238 @@ class PyAero3DSimulatorApp(ShowBase):
         alnp = self.render.attachNewNode(alight)
         self.render.setLight(alnp)
 
-    def spawn_jet_on_runway(self) -> int:
-        init_pos = np.array([0.0, 1.8, -1000.0], dtype=np.float64)
-        init_vel = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+    def _spawn_preset_scenario(self, idx: int) -> int:
+        """Spawns the exact 3D physical counterpart of the selected Graph Studio preset."""
+        if idx == 0:  # Ballistics Cannon Projectile
+            return self.spawn_cannon_projectile()
+        elif idx == 1:  # Fighter Jet 6-DOF
+            return self.spawn_fighter_jet_airborne()
+        elif idx == 2:  # NACA Airfoil Glider
+            return self.spawn_airfoil_glider()
+        elif idx == 3:  # Multi-Stage Rocket Launch
+            return self.spawn_rocket_launch()
+        elif idx == 4:  # Orbital Satellite
+            return self.spawn_orbital_satellite()
+        elif idx == 5:  # Double Pendulum
+            return self.spawn_double_pendulum()
+        elif idx == 6:  # Lorentz Particle Cyclotron
+            return self.spawn_cyclotron_particle()
+        elif idx == 7:  # Bouncing Viscoelastic Spheres
+            return self.spawn_bouncing_spheres()
+        else:
+            return self.spawn_fighter_jet_airborne()
+
+    def spawn_fighter_jet_airborne(self) -> int:
+        """Spawns Fighter Jet in mid-air with high forward airspeed and responsive throttle."""
+        v0 = self.param_v0 if self.param_v0 is not None else 220.0
+        theta_deg = self.param_theta if self.param_theta is not None else 5.0
+        mass = self.param_mass if self.param_mass is not None else 12000.0
+        cd = self.param_cd if self.param_cd is not None else 0.024
+        area = self.param_area if self.param_area is not None else 28.0
+
+        theta_rad = np.radians(theta_deg)
+        init_pos = np.array([0.0, 1200.0, -500.0], dtype=np.float64)
+        init_vel = np.array([0.0, v0 * np.sin(theta_rad), v0 * np.cos(theta_rad)], dtype=np.float64)
+
         idx = self.state_buffer.allocate_entity(
             entity_type=EntityType.FIXED_WING_JET,
-            mass=12500.0,
+            mass=mass,
             position=init_pos,
             velocity=init_vel,
             radius=8.5,
-            cd=0.024,
-            area=28.0,
+            cd=cd,
+            area=area,
         )
+        self.state_buffer.data[idx, StateIdx.THROTTLE] = 0.85
 
         actor_np = VehicleModelBuilder.create_fighter_jet()
         actor_np.reparentTo(self.render)
         self.actor_nodes[idx] = actor_np
         self.current_controlled_idx = idx
         self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Spawned Fighter Jet (Entity #{idx}) on Runway.")
+        print(f"[PyAero3D] Spawned 6-DOF Fighter Jet (Entity #{idx}) at 1,200m altitude ({v0*3.6:.0f} km/h, 85% Throttle).")
+        return idx
+
+    def spawn_cannon_projectile(self) -> int:
+        """Spawns 3D artillery cannon shell with exact launch angle and velocity from graph."""
+        v0 = self.param_v0 if self.param_v0 is not None else 320.0
+        theta_deg = self.param_theta if self.param_theta is not None else 45.0
+        mass = self.param_mass if self.param_mass is not None else 15.0
+        cd = self.param_cd if self.param_cd is not None else 0.30
+        area = self.param_area if self.param_area is not None else 0.08
+
+        theta_rad = np.radians(theta_deg)
+        init_pos = np.array([0.0, 5.0, -1200.0], dtype=np.float64)
+        init_vel = np.array([0.0, v0 * np.sin(theta_rad), v0 * np.cos(theta_rad)], dtype=np.float64)
+
+        idx = self.state_buffer.allocate_entity(
+            entity_type=EntityType.CANNON_PROJECTILE,
+            mass=mass,
+            position=init_pos,
+            velocity=init_vel,
+            radius=1.2,
+            cd=cd,
+            area=area,
+        )
+
+        actor_np = VehicleModelBuilder.create_cannon_projectile()
+        actor_np.reparentTo(self.render)
+        self.actor_nodes[idx] = actor_np
+        self.current_controlled_idx = idx
+        self.yoke.set_target_entity(idx)
+        print(f"[PyAero3D] Fired Ballistic Artillery Shell (Entity #{idx}) at {theta_deg:.1f}° pitch, v0={v0:.0f} m/s.")
+        return idx
+
+    def spawn_airfoil_glider(self) -> int:
+        """Spawns NACA Glider Wing vehicle gliding over mountain valley."""
+        v0 = self.param_v0 if self.param_v0 is not None else 95.0
+        mass = self.param_mass if self.param_mass is not None else 650.0
+        cd = self.param_cd if self.param_cd is not None else 0.018
+        area = self.param_area if self.param_area is not None else 16.0
+
+        init_pos = np.array([0.0, 1600.0, -200.0], dtype=np.float64)
+        init_vel = np.array([0.0, -1.5, v0], dtype=np.float64)
+
+        idx = self.state_buffer.allocate_entity(
+            entity_type=EntityType.AIRFOIL_GLIDER,
+            mass=mass,
+            position=init_pos,
+            velocity=init_vel,
+            radius=7.5,
+            cd=cd,
+            area=area,
+        )
+
+        actor_np = VehicleModelBuilder.create_airfoil_wing()
+        actor_np.reparentTo(self.render)
+        self.actor_nodes[idx] = actor_np
+        self.current_controlled_idx = idx
+        self.yoke.set_target_entity(idx)
+        print(f"[PyAero3D] Spawned NACA Aerodynamic Glider (Entity #{idx}) at 1,600m altitude.")
+        return idx
+
+    def spawn_rocket_launch(self) -> int:
+        """Spawns 3D multi-stage rocket on launch pad with full vertical throttle."""
+        mass = self.param_mass if self.param_mass is not None else 8500.0
+        cd = self.param_cd if self.param_cd is not None else 0.20
+        area = self.param_area if self.param_area is not None else 4.5
+
+        init_pos = np.array([300.0, 5.0, -1200.0], dtype=np.float64)
+        init_vel = np.array([0.0, 5.0, 0.0], dtype=np.float64)
+
+        idx = self.state_buffer.allocate_entity(
+            entity_type=EntityType.MULTI_STAGE_ROCKET,
+            mass=mass,
+            position=init_pos,
+            velocity=init_vel,
+            radius=1.8,
+            cd=cd,
+            area=area,
+        )
+        self.state_buffer.data[idx, StateIdx.THROTTLE] = 1.0
+
+        actor_np = VehicleModelBuilder.create_rocket()
+        actor_np.reparentTo(self.render)
+        self.actor_nodes[idx] = actor_np
+        self.current_controlled_idx = idx
+        self.yoke.set_target_entity(idx)
+        print(f"[PyAero3D] Initiated Multi-Stage Rocket Liftoff (Entity #{idx}) from Launch Pad.")
+        return idx
+
+    def spawn_orbital_satellite(self) -> int:
+        """Spawns 3D satellite in space orbit with solar panels."""
+        init_pos = np.array([0.0, 3500.0, 0.0], dtype=np.float64)
+        init_vel = np.array([0.0, 0.0, 180.0], dtype=np.float64)
+
+        idx = self.state_buffer.allocate_entity(
+            entity_type=EntityType.ORBITAL_SATELLITE,
+            mass=2400.0,
+            position=init_pos,
+            velocity=init_vel,
+            radius=3.5,
+            cd=0.01,
+            area=8.0,
+        )
+
+        actor_np = VehicleModelBuilder.create_satellite()
+        actor_np.reparentTo(self.render)
+        self.actor_nodes[idx] = actor_np
+        self.current_controlled_idx = idx
+        self.yoke.set_target_entity(idx)
+        print(f"[PyAero3D] Spawned Orbital Satellite (Entity #{idx}) in Orbit at 3,500m.")
+        return idx
+
+    def spawn_double_pendulum(self) -> int:
+        """Spawns 3D articulated double pendulum swinging in alpine clearing."""
+        init_pos = np.array([0.0, 20.0, -900.0], dtype=np.float64)
+        init_vel = np.array([5.0, 0.0, 0.0], dtype=np.float64)
+
+        idx = self.state_buffer.allocate_entity(
+            entity_type=EntityType.DOUBLE_PENDULUM,
+            mass=10.0,
+            position=init_pos,
+            velocity=init_vel,
+            radius=4.0,
+            cd=0.10,
+            area=1.0,
+        )
+
+        actor_np = VehicleModelBuilder.create_double_pendulum_rods()
+        actor_np.reparentTo(self.render)
+        self.actor_nodes[idx] = actor_np
+        self.current_controlled_idx = idx
+        self.yoke.set_target_entity(idx)
+        print(f"[PyAero3D] Spawned 3D Articulated Double Pendulum (Entity #{idx}).")
+        return idx
+
+    def spawn_cyclotron_particle(self) -> int:
+        """Spawns 3D particle cyclotron chamber with magnetic gyromotion."""
+        init_pos = np.array([0.0, 30.0, -800.0], dtype=np.float64)
+        init_vel = np.array([50.0, 20.0, 0.0], dtype=np.float64)
+
+        idx = self.state_buffer.allocate_entity(
+            entity_type=EntityType.LORENTZ_PARTICLE,
+            mass=1.0,
+            position=init_pos,
+            velocity=init_vel,
+            radius=2.5,
+            cd=0.0,
+            area=0.1,
+        )
+
+        actor_np = VehicleModelBuilder.create_cyclotron_chamber()
+        actor_np.reparentTo(self.render)
+        self.actor_nodes[idx] = actor_np
+        self.current_controlled_idx = idx
+        self.yoke.set_target_entity(idx)
+        print(f"[PyAero3D] Spawned 3D Lorentz Particle Cyclotron (Entity #{idx}).")
+        return idx
+
+    def spawn_bouncing_spheres(self) -> int:
+        """Spawns bouncing viscoelastic physical spheres down mountain slope."""
+        init_pos = np.array([0.0, 850.0, -200.0], dtype=np.float64)
+        init_vel = np.array([15.0, 5.0, 40.0], dtype=np.float64)
+
+        idx = self.state_buffer.allocate_entity(
+            entity_type=EntityType.BOUNCING_SPHERE,
+            mass=25.0,
+            position=init_pos,
+            velocity=init_vel,
+            radius=1.5,
+            cd=0.45,
+            area=1.8,
+        )
+
+        actor_np = VehicleModelBuilder.create_bouncing_sphere()
+        actor_np.reparentTo(self.render)
+        self.actor_nodes[idx] = actor_np
+        self.current_controlled_idx = idx
+        self.yoke.set_target_entity(idx)
+        print(f"[PyAero3D] Spawned Viscoelastic Bouncing Sphere (Entity #{idx}) on Mountain Slope.")
         return idx
 
     def spawn_drone_mountain(self) -> int:
+        """Spawns 6-DOF quadrotor drone hovering over mountain ridge."""
         init_pos = np.array([1500.0, 950.0, 1200.0], dtype=np.float64)
         init_vel = np.array([0.0, 0.0, 0.0], dtype=np.float64)
         idx = self.state_buffer.allocate_entity(
@@ -156,16 +392,18 @@ class PyAero3DSimulatorApp(ShowBase):
             cd=1.1,
             area=0.25,
         )
+        self.state_buffer.data[idx, StateIdx.THROTTLE] = 0.55
 
-        actor_np = VehicleModelBuilder.create_quadrotor()
+        actor_np = VehicleModelBuilder.create_quadrotor_drone()
         actor_np.reparentTo(self.render)
         self.actor_nodes[idx] = actor_np
         self.current_controlled_idx = idx
         self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Spawned Quadrotor Drone (Entity #{idx}) over Mountain Ridge.")
+        print(f"[PyAero3D] Spawned Quadrotor Drone (Entity #{idx}) hovering over Mountain Ridge.")
         return idx
 
     def spawn_cargo_drop(self) -> int:
+        """Spawns cargo parachute drop at high altitude."""
         init_pos = np.array([0.0, 2200.0, 500.0], dtype=np.float64)
         init_vel = np.array([0.0, 0.0, 80.0], dtype=np.float64)
         idx = self.state_buffer.allocate_entity(
@@ -186,26 +424,9 @@ class PyAero3DSimulatorApp(ShowBase):
         print(f"[PyAero3D] Spawned High-Altitude Cargo Parachute Drop (Entity #{idx}).")
         return idx
 
-    def spawn_rocket(self) -> int:
-        init_pos = np.array([300.0, 5.0, -1200.0], dtype=np.float64)
-        init_vel = np.array([0.0, 0.0, 0.0], dtype=np.float64)
-        idx = self.state_buffer.allocate_entity(
-            entity_type=EntityType.MULTI_STAGE_ROCKET,
-            mass=8500.0,
-            position=init_pos,
-            velocity=init_vel,
-            radius=1.8,
-            cd=0.20,
-            area=4.5,
-        )
-
-        actor_np = VehicleModelBuilder.create_rocket()
-        actor_np.reparentTo(self.render)
-        self.actor_nodes[idx] = actor_np
-        self.current_controlled_idx = idx
-        self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Spawned Multi-Stage Launch Rocket (Entity #{idx}).")
-        return idx
+    def _cycle_camera_mode(self) -> None:
+        new_mode = self.cam_controller.cycle_mode()
+        print(f"[PyAero3D] Camera Mode switched to: {new_mode.name}")
 
     def _trigger_manual_breakup(self) -> None:
         if self.current_controlled_idx in self.actor_nodes:
@@ -216,17 +437,12 @@ class PyAero3DSimulatorApp(ShowBase):
                 old_np.removeNode()
 
     def _reset_simulation_world(self) -> None:
-        """Resets simulation world, clears all active entities, and respawns fighter jet."""
-        print("[PyAero3D] Resetting Simulation World...")
-        for idx, node in list(self.actor_nodes.items()):
+        print("[PyAero3D] Resetting simulation world...")
+        for node in self.actor_nodes.values():
             node.removeNode()
-            self.state_buffer.free_entity(idx)
         self.actor_nodes.clear()
-        self.spawn_jet_on_runway()
-
-    def _cycle_camera_mode(self) -> None:
-        mode = self.cam_controller.cycle_mode()
-        print(f"[PyAero3D] Camera Mode: {mode.name}")
+        self.state_buffer.clear()
+        self._spawn_preset_scenario(self.scenario_idx)
 
     def _render_frame_update(self, task):
         dt = globalClock.getDt()
@@ -250,11 +466,23 @@ class PyAero3DSimulatorApp(ShowBase):
                 elif ent_type == EntityType.FIXED_WING_JET:
                     actor_np = VehicleModelBuilder.create_fighter_jet()
                 elif ent_type == EntityType.QUADROTOR_DRONE:
-                    actor_np = VehicleModelBuilder.create_quadrotor()
+                    actor_np = VehicleModelBuilder.create_quadrotor_drone()
                 elif ent_type == EntityType.CARGO_PARACHUTE:
                     actor_np = VehicleModelBuilder.create_cargo_parachute()
                 elif ent_type == EntityType.MULTI_STAGE_ROCKET:
                     actor_np = VehicleModelBuilder.create_rocket()
+                elif ent_type == EntityType.CANNON_PROJECTILE:
+                    actor_np = VehicleModelBuilder.create_cannon_projectile()
+                elif ent_type == EntityType.AIRFOIL_GLIDER:
+                    actor_np = VehicleModelBuilder.create_airfoil_wing()
+                elif ent_type == EntityType.ORBITAL_SATELLITE:
+                    actor_np = VehicleModelBuilder.create_satellite()
+                elif ent_type == EntityType.DOUBLE_PENDULUM:
+                    actor_np = VehicleModelBuilder.create_double_pendulum_rods()
+                elif ent_type == EntityType.LORENTZ_PARTICLE:
+                    actor_np = VehicleModelBuilder.create_cyclotron_chamber()
+                elif ent_type == EntityType.BOUNCING_SPHERE:
+                    actor_np = VehicleModelBuilder.create_bouncing_sphere()
                 else:
                     actor_np = VehicleModelBuilder.create_debris_shard()
 
@@ -266,8 +494,6 @@ class PyAero3DSimulatorApp(ShowBase):
                 pos = row[StateIdx.PX:StateIdx.PZ + 1]
                 quat = row[StateIdx.QW:StateIdx.QZ + 1]
                 node.setPos(pos[0], pos[2], pos[1])
-
-                from panda3d.core import LQuaternionf
                 node.setQuat(LQuaternionf(quat[0], quat[1], quat[3], quat[2]))
 
         # Update Camera Controller
@@ -281,20 +507,23 @@ class PyAero3DSimulatorApp(ShowBase):
         # Update HUD Telemetry
         ground_h = 0.0
         if target_row is not None:
-            px, pz = target_row[StateIdx.PX], target_row[StateIdx.PZ]
-            ground_h = self.terrain_gen.get_height(px, pz)
-
-        self.hud.update_telemetry(
-            state_row=target_row,
-            ground_h=ground_h,
-            camera_mode_name=self.cam_controller.mode.name,
+            ground_h = self.terrain_gen.get_height(target_row[StateIdx.PX], target_row[StateIdx.PZ])
+        self.hud.update(
+            state_snapshot=snapshot,
+            controlled_idx=self.current_controlled_idx,
+            ground_height_m=ground_h,
             physics_hz=self.physics_thread.effective_hz,
-            total_active=len(active_indices),
+            dt=dt,
         )
 
         return task.cont
 
-    def userExit(self):
-        print("[PyAero3D] Stopping Physics Thread...")
-        self.physics_thread.stop()
-        super().userExit()
+
+def launch_3d_simulator(**kwargs) -> None:
+    """Launches the 3D Panda3D Application."""
+    app = PyAero3DSimulatorApp(**kwargs)
+    app.run()
+
+
+if __name__ == "__main__":
+    launch_3d_simulator()

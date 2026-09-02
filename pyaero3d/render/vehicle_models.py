@@ -336,4 +336,277 @@ class VehicleModelBuilder:
         node.addGeom(geom)
         return NodePath(node)
 
+    @staticmethod
+    def create_cannon_projectile() -> NodePath:
+        """
+        Builds aerodynamic ballistic artillery shell with copper driving band.
+        """
+        vdata = GeomVertexData("CannonMesh", GeomVertexFormat.getV3c4(), Geom.UHDynamic)
+        v_writer = GeomVertexWriter(vdata, "vertex")
+        c_writer = GeomVertexWriter(vdata, "color")
+        tris = GeomTriangles(Geom.UHDynamic)
+
+        steel_col = (0.35, 0.40, 0.45, 1.0)
+        copper_col = (0.85, 0.50, 0.20, 1.0)
+        tip_col = (0.90, 0.90, 0.95, 1.0)
+
+        # Ogive nose tip (+Z)
+        v_writer.addData3(0.0, 0.0, 2.8)
+        c_writer.addData4(*tip_col)
+
+        r = 0.55
+        # Mid body ring
+        v_writer.addData3(r, 0.0, 1.0)
+        v_writer.addData3(0.0, r, 1.0)
+        v_writer.addData3(-r, 0.0, 1.0)
+        v_writer.addData3(0.0, -r, 1.0)
+        for _ in range(4): c_writer.addData4(*steel_col)
+
+        # Base ring
+        v_writer.addData3(r, 0.0, -1.5)
+        v_writer.addData3(0.0, r, -1.5)
+        v_writer.addData3(-r, 0.0, -1.5)
+        v_writer.addData3(0.0, -r, -1.5)
+        for _ in range(4): c_writer.addData4(*copper_col)
+
+        # Base cap
+        v_writer.addData3(0.0, 0.0, -1.8)
+        c_writer.addData4(*steel_col)
+
+        tri_list = [
+            (0, 1, 2), (0, 2, 3), (0, 3, 4), (0, 4, 1),
+            (1, 5, 6), (1, 6, 2), (2, 6, 7), (2, 7, 3),
+            (3, 7, 8), (3, 8, 4), (4, 8, 5), (4, 5, 1),
+            (9, 6, 5), (9, 7, 6), (9, 8, 7), (9, 5, 8),
+        ]
+        for (i0, i1, i2) in tri_list:
+            tris.addVertices(i0, i1, i2)
+            tris.addVertices(i0, i2, i1)
+
+        geom = Geom(vdata)
+        geom.addPrimitive(tris)
+        node = GeomNode("CannonProjectileNode")
+        node.addGeom(geom)
+        return NodePath(node)
+
+    @staticmethod
+    def create_airfoil_wing() -> NodePath:
+        """
+        Builds aerodynamic glider test wing vehicle with swept wings and T-tail.
+        """
+        vdata = GeomVertexData("WingMesh", GeomVertexFormat.getV3c4(), Geom.UHDynamic)
+        v_writer = GeomVertexWriter(vdata, "vertex")
+        c_writer = GeomVertexWriter(vdata, "color")
+        tris = GeomTriangles(Geom.UHDynamic)
+
+        white_col = (0.92, 0.94, 0.96, 1.0)
+        blue_col = (0.15, 0.50, 0.90, 1.0)
+
+        # Slender glider fuselage & high-aspect wings
+        pts = [
+            (0.0, 0.0, 4.5), # 0: Nose
+            (0.4, 0.2, 1.0), (-0.4, 0.2, 1.0), (0.0, -0.3, 1.0), # 1,2,3
+            (7.5, 0.3, -0.5), (-7.5, 0.3, -0.5), # 4,5: Wingtips
+            (0.3, 0.0, -3.5), (-0.3, 0.0, -3.5), # 6,7: Tail root
+            (0.0, 1.6, -3.8), # 8: T-tail top
+            (1.8, 1.6, -4.0), (-1.8, 1.6, -4.0), # 9,10: T-tail horizontal tips
+        ]
+        for idx, (x, y, z) in enumerate(pts):
+            v_writer.addData3(x, y, z)
+            if idx in (4, 5, 9, 10):
+                c_writer.addData4(*blue_col)
+            else:
+                c_writer.addData4(*white_col)
+
+        tri_list = [
+            (0, 1, 2), (0, 2, 3), (0, 3, 1),
+            (1, 4, 6), (2, 7, 5), (1, 6, 2), (2, 6, 7),
+            (6, 8, 7), (8, 9, 10), (8, 10, 7), (8, 6, 9),
+        ]
+        for (i0, i1, i2) in tri_list:
+            tris.addVertices(i0, i1, i2)
+            tris.addVertices(i0, i2, i1)
+
+        geom = Geom(vdata)
+        geom.addPrimitive(tris)
+        node = GeomNode("AirfoilWingNode")
+        node.addGeom(geom)
+        return NodePath(node)
+
+    @staticmethod
+    def create_satellite() -> NodePath:
+        """
+        Builds orbital satellite with gold foil bus, twin solar arrays, and high-gain dish.
+        """
+        vdata = GeomVertexData("SatMesh", GeomVertexFormat.getV3c4(), Geom.UHDynamic)
+        v_writer = GeomVertexWriter(vdata, "vertex")
+        c_writer = GeomVertexWriter(vdata, "color")
+        tris = GeomTriangles(Geom.UHDynamic)
+
+        gold_col = (0.95, 0.75, 0.20, 1.0) # Gold MLI insulation
+        solar_col = (0.10, 0.25, 0.70, 1.0) # Dark blue photovoltaic cells
+        dish_col = (0.85, 0.88, 0.90, 1.0)
+
+        # Central bus cube
+        s = 0.8
+        for x in [-s, s]:
+            for y in [-s, s]:
+                for z in [-s, s]:
+                    v_writer.addData3(x, y, z)
+                    c_writer.addData4(*gold_col)
+
+        # Solar panels (Left & Right)
+        # Left array (+X)
+        v_writer.addData3(s + 3.0, 0.6, 0.0)
+        v_writer.addData3(s + 3.0, -0.6, 0.0)
+        v_writer.addData3(s, -0.6, 0.0)
+        v_writer.addData3(s, 0.6, 0.0)
+        # Right array (-X)
+        v_writer.addData3(-s - 3.0, 0.6, 0.0)
+        v_writer.addData3(-s - 3.0, -0.6, 0.0)
+        v_writer.addData3(-s, -0.6, 0.0)
+        v_writer.addData3(-s, 0.6, 0.0)
+        for _ in range(8): c_writer.addData4(*solar_col)
+
+        # High gain dish (+Z)
+        v_writer.addData3(0.0, 0.0, s + 1.2)
+        v_writer.addData3(0.7, 0.7, s + 0.4)
+        v_writer.addData3(-0.7, 0.7, s + 0.4)
+        v_writer.addData3(-0.7, -0.7, s + 0.4)
+        v_writer.addData3(0.7, -0.7, s + 0.4)
+        for _ in range(5): c_writer.addData4(*dish_col)
+
+        tri_list = [
+            # Cube
+            (0, 1, 2), (1, 3, 2), (4, 6, 5), (5, 6, 7),
+            (0, 4, 1), (1, 4, 5), (2, 3, 6), (3, 7, 6),
+            (0, 2, 4), (2, 6, 4), (1, 5, 3), (3, 5, 7),
+            # Solar panels
+            (8, 9, 10), (8, 10, 11), (12, 14, 13), (12, 15, 14),
+            # Dish
+            (16, 17, 18), (16, 18, 19), (16, 19, 20), (16, 20, 17),
+        ]
+        for (i0, i1, i2) in tri_list:
+            tris.addVertices(i0, i1, i2)
+            tris.addVertices(i0, i2, i1)
+
+        geom = Geom(vdata)
+        geom.addPrimitive(tris)
+        node = GeomNode("SatelliteNode")
+        node.addGeom(geom)
+        return NodePath(node)
+
+    @staticmethod
+    def create_double_pendulum_rods() -> NodePath:
+        """
+        Builds articulated dual metallic rods with pivot bearings and pendulum bobs.
+        """
+        vdata = GeomVertexData("PendulumMesh", GeomVertexFormat.getV3c4(), Geom.UHDynamic)
+        v_writer = GeomVertexWriter(vdata, "vertex")
+        c_writer = GeomVertexWriter(vdata, "color")
+        tris = GeomTriangles(Geom.UHDynamic)
+
+        chrome_col = (0.75, 0.80, 0.85, 1.0)
+        bob1_col = (0.85, 0.25, 0.25, 1.0)
+        bob2_col = (0.25, 0.75, 0.95, 1.0)
+
+        # Rod 1 & Bob 1
+        pts = [
+            (0.0, 0.0, 0.0), (0.0, -1.8, 0.0), (0.3, -1.8, 0.0), (-0.3, -1.8, 0.0),
+            (0.0, -3.6, 0.0), (0.4, -3.6, 0.0), (-0.4, -3.6, 0.0),
+        ]
+        for idx, p in enumerate(pts):
+            v_writer.addData3(*p)
+            if idx in (1, 2, 3): c_writer.addData4(*bob1_col)
+            elif idx in (4, 5, 6): c_writer.addData4(*bob2_col)
+            else: c_writer.addData4(*chrome_col)
+
+        tri_list = [(0, 2, 1), (0, 1, 3), (1, 5, 4), (1, 4, 6)]
+        for (i0, i1, i2) in tri_list:
+            tris.addVertices(i0, i1, i2)
+            tris.addVertices(i0, i2, i1)
+
+        geom = Geom(vdata)
+        geom.addPrimitive(tris)
+        node = GeomNode("DoublePendulumNode")
+        node.addGeom(geom)
+        return NodePath(node)
+
+    @staticmethod
+    def create_cyclotron_chamber() -> NodePath:
+        """
+        Builds electromagnetic cyclotron field chamber with glowing central particle.
+        """
+        vdata = GeomVertexData("CyclotronMesh", GeomVertexFormat.getV3c4(), Geom.UHDynamic)
+        v_writer = GeomVertexWriter(vdata, "vertex")
+        c_writer = GeomVertexWriter(vdata, "color")
+        tris = GeomTriangles(Geom.UHDynamic)
+
+        magnet_col = (0.20, 0.22, 0.28, 0.9)
+        glow_col = (0.10, 0.95, 0.65, 1.0)
+
+        # Outer electromagnetic pole rings
+        r_c = 2.5
+        v_writer.addData3(0.0, 0.0, 0.0) # Central particle
+        c_writer.addData4(*glow_col)
+
+        for ang_deg in [0, 60, 120, 180, 240, 300]:
+            rad = np.radians(ang_deg)
+            v_writer.addData3(r_c * np.cos(rad), 0.8, r_c * np.sin(rad))
+            c_writer.addData4(*magnet_col)
+            v_writer.addData3(r_c * np.cos(rad), -0.8, r_c * np.sin(rad))
+            c_writer.addData4(*magnet_col)
+
+        tri_list = [
+            (0, 1, 3), (0, 3, 5), (0, 5, 7), (0, 7, 9), (0, 9, 11), (0, 11, 1),
+            (0, 2, 4), (0, 4, 6), (0, 6, 8), (0, 8, 10), (0, 10, 12), (0, 12, 2),
+        ]
+        for (i0, i1, i2) in tri_list:
+            tris.addVertices(i0, i1, i2)
+            tris.addVertices(i0, i2, i1)
+
+        geom = Geom(vdata)
+        geom.addPrimitive(tris)
+        node = GeomNode("CyclotronNode")
+        node.addGeom(geom)
+        return NodePath(node)
+
+    @staticmethod
+    def create_bouncing_sphere() -> NodePath:
+        """
+        Builds high-visibility viscoelastic restitution bouncing sphere.
+        """
+        vdata = GeomVertexData("SphereMesh", GeomVertexFormat.getV3c4(), Geom.UHDynamic)
+        v_writer = GeomVertexWriter(vdata, "vertex")
+        c_writer = GeomVertexWriter(vdata, "color")
+        tris = GeomTriangles(Geom.UHDynamic)
+
+        neon_col = (0.95, 0.80, 0.10, 1.0)
+        core_col = (0.85, 0.30, 0.10, 1.0)
+
+        r = 1.2
+        # Octahedron sphere base
+        v_writer.addData3(0.0, r, 0.0)
+        v_writer.addData3(0.0, -r, 0.0)
+        v_writer.addData3(r, 0.0, 0.0)
+        v_writer.addData3(-r, 0.0, 0.0)
+        v_writer.addData3(0.0, 0.0, r)
+        v_writer.addData3(0.0, 0.0, -r)
+        for i in range(6):
+            c_writer.addData4(*(neon_col if i % 2 == 0 else core_col))
+
+        tri_list = [
+            (0, 2, 4), (0, 4, 3), (0, 3, 5), (0, 5, 2),
+            (1, 4, 2), (1, 3, 4), (1, 5, 3), (1, 2, 5),
+        ]
+        for (i0, i1, i2) in tri_list:
+            tris.addVertices(i0, i1, i2)
+            tris.addVertices(i0, i2, i1)
+
+        geom = Geom(vdata)
+        geom.addPrimitive(tris)
+        node = GeomNode("BouncingSphereNode")
+        node.addGeom(geom)
+        return NodePath(node)
+
     create_quadrotor = create_quadrotor_drone

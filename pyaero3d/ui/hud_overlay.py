@@ -142,7 +142,24 @@ class FlightHUDOverlay:
             self.txt_help_modal.setText(help_content)
         else:
             self.txt_help_modal.setText("")
-        return self.show_help
+    def update(
+        self,
+        state_snapshot: np.ndarray,
+        controlled_idx: int,
+        ground_height_m: float,
+        physics_hz: float,
+        dt: float,
+    ) -> None:
+        """Standard update wrapper for HUD telemetry."""
+        target_row = state_snapshot[controlled_idx] if (0 <= controlled_idx < state_snapshot.shape[0] and state_snapshot[controlled_idx, StateIdx.ACTIVE] > 0.5) else None
+        active_count = int(np.sum(state_snapshot[:, StateIdx.ACTIVE] > 0.5))
+        self.update_telemetry(
+            state_row=target_row,
+            ground_h=ground_height_m,
+            camera_mode_name="CHASE",
+            physics_hz=physics_hz,
+            total_active=active_count,
+        )
 
     def update_telemetry(
         self,

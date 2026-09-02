@@ -67,6 +67,12 @@ class EntityType(IntEnum):
     MULTI_STAGE_ROCKET = 4
     DEBRIS_FRAGMENT = 5
     TERRAIN_ANCHOR = 6
+    CANNON_PROJECTILE = 7
+    AIRFOIL_GLIDER = 8
+    ORBITAL_SATELLITE = 9
+    DOUBLE_PENDULUM = 10
+    LORENTZ_PARTICLE = 11
+    BOUNCING_SPHERE = 12
 
 
 # Stride length for tensor memory allocation

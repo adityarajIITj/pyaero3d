@@ -39,7 +39,7 @@ class FlightDynamicsSolver:
         # Gravity force: Y-down in global frame
         f_gravity = np.array([0.0, -mass * STANDARD_GRAVITY, 0.0], dtype=np.float64)
 
-        if ent_type == EntityType.FIXED_WING_JET:
+        if ent_type in (EntityType.FIXED_WING_JET, EntityType.AIRFOIL_GLIDER):
             return FlightDynamicsSolver._solve_fixed_wing(state_row, vel, quat, omega, q_dyn, rho, f_gravity, dt)
         elif ent_type == EntityType.QUADROTOR_DRONE:
             return FlightDynamicsSolver._solve_quadrotor(state_row, vel, quat, omega, q_dyn, rho, f_gravity, dt)
@@ -47,10 +47,28 @@ class FlightDynamicsSolver:
             return FlightDynamicsSolver._solve_cargo_drop(state_row, vel, quat, q_dyn, f_gravity, dt)
         elif ent_type == EntityType.MULTI_STAGE_ROCKET:
             return FlightDynamicsSolver._solve_rocket(state_row, vel, quat, omega, q_dyn, alt, f_gravity, dt)
+        elif ent_type == EntityType.ORBITAL_SATELLITE:
+            # Orbital altitude gravity decay
+            r = 6371000.0 + alt
+            g_orbit = 6.67430e-11 * 5.97219e24 / (r ** 2)
+            f_orbit_grav = np.array([0.0, -mass * g_orbit, 0.0])
+            thrust = state_row[StateIdx.THROTTLE] * 5000.0
+            f_thrust = np.array([0.0, 0.0, thrust])
+            return f_orbit_grav + f_thrust, np.zeros(3)
+        elif ent_type == EntityType.LORENTZ_PARTICLE:
+            # Cyclotron magnetic field along Y/Z
+            b_field = np.array([0.0, 1.5, 0.0])
+            e_field = np.array([0.0, 0.0, 50.0])
+            f_lorentz = 1.0 * (e_field + np.cross(vel, b_field))
+            return f_lorentz, np.zeros(3)
         else:
-            # Free particle / fragment debris
+            # Free particle / projectile / sphere / fragment debris
             area = max(0.01, state_row[StateIdx.AREA])
-            cd = max(0.1, state_row[StateIdx.CD])
+            cd = max(0.05, state_row[StateIdx.CD])
+            # Mach drag multiplier
+            mach = speed / max(100.0, a_sound)
+            if 0.8 < mach < 1.3:
+                cd *= 1.8
             f_drag = -0.5 * rho * speed * cd * area * vel if speed > 1e-4 else np.zeros(3)
             return f_gravity + f_drag, np.zeros(3)
 

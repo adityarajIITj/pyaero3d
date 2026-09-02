@@ -482,11 +482,31 @@ class PyAero3DGraphStudio(QMainWindow):
         dlg.exec()
 
     def launch_3d_sandbox(self):
-        """Launches the full 3D Panda3D mountain flight simulator sandbox in a separate process."""
+        """Launches the full 3D Panda3D mountain flight simulator sandbox in a separate process with current preset & parameters."""
         import subprocess
         main_py = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "main.py"))
+        scen_idx = self.cmb_scenario.currentIndex()
+        v0 = self.spin_v0.value()
+        theta = self.spin_theta.value()
+        mass = self.spin_mass.value()
+        cd = self.spin_cd.value()
+        area = self.spin_area.value()
+        wind = self.spin_wind.value()
+        thrust = self.spin_thrust.value()
+
+        cmd = [
+            sys.executable, main_py, "--3d",
+            "--scenario", str(scen_idx),
+            "--v0", str(v0),
+            "--theta", str(theta),
+            "--mass", str(mass),
+            "--cd", str(cd),
+            "--area", str(area),
+            "--wind", str(wind),
+            "--thrust", str(thrust),
+        ]
         try:
-            subprocess.Popen([sys.executable, main_py, "--3d"])
+            subprocess.Popen(cmd)
         except Exception as e:
             QMessageBox.warning(self, "3D Simulator Launch Error", f"Failed to launch 3D simulator:\n{e}")
 
