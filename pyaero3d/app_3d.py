@@ -484,34 +484,34 @@ class PyAero3DSimulatorApp(ShowBase):
 
         # Pivot Bearing Housing
         pivot_housing = MeshPrimitiveBuilder.build_cylinder(
-            radius=0.25, length=0.6, axis="z", color=(0.95, 0.75, 0.20, 1.0), name="PivotHousing"
+            radius=0.25, length=0.6, segments=24, color=(0.95, 0.75, 0.20, 1.0), name="PivotHousing"
         )
         pivot_housing.reparentTo(self.render)
-        pivot_housing.setPos(0.0, -900.0, 20.0)
+        pivot_housing.setPos(0.0, -900.3, 20.0)
         self.scenario_props.append(pivot_housing)
 
         # Rod 1 & Bob 1
         rod1 = MeshPrimitiveBuilder.build_cylinder(
-            radius=0.08, length=3.5, axis="y", segments=20, color=(0.85, 0.88, 0.92, 1.0), name="Rod1"
+            radius=0.07, length=3.5, segments=24, color=(0.85, 0.88, 0.92, 1.0), name="Rod1"
         )
         rod1.reparentTo(self.render)
         self.pendulum_nodes["rod1"] = rod1
 
         bob1 = MeshPrimitiveBuilder.build_uv_sphere(
-            radius=0.55, rings=16, sectors=24, color=(0.95, 0.65, 0.15, 1.0), name="Bob1"
+            radius=0.55, rings=24, sectors=32, color=(0.95, 0.65, 0.15, 1.0), name="Bob1"
         )
         bob1.reparentTo(self.render)
         self.pendulum_nodes["bob1"] = bob1
 
         # Rod 2 & Bob 2
         rod2 = MeshPrimitiveBuilder.build_cylinder(
-            radius=0.08, length=3.5, axis="y", segments=20, color=(0.75, 0.80, 0.85, 1.0), name="Rod2"
+            radius=0.07, length=3.5, segments=24, color=(0.75, 0.80, 0.85, 1.0), name="Rod2"
         )
         rod2.reparentTo(self.render)
         self.pendulum_nodes["rod2"] = rod2
 
         bob2 = MeshPrimitiveBuilder.build_uv_sphere(
-            radius=0.65, rings=16, sectors=24, color=(0.15, 0.85, 1.0, 1.0), name="Bob2"
+            radius=0.65, rings=24, sectors=32, color=(0.15, 0.85, 1.0, 1.0), name="Bob2"
         )
         bob2.reparentTo(self.render)
         self.pendulum_nodes["bob2"] = bob2
@@ -589,37 +589,39 @@ class PyAero3DSimulatorApp(ShowBase):
         # 1. Update Double Pendulum 3D Physical Articulation
         if self.scenario_idx == 5 and len(self.pendulum_nodes) == 4:
             if not self.is_paused:
-                # RK4 integration substeps for stability
+                # RK4 integration substeps for high accuracy
                 for _ in range(4):
                     self.pendulum_state = self.pendulum_solver.rk4_step(self.pendulum_state, dt * 0.25)
 
-            x1, y1, x2, y2 = self.pendulum_solver.get_cartesian_positions(self.pendulum_state)
-            pivot_x = 0.0; pivot_y = 20.0; pivot_z = -900.0
+            th1, _, th2, _ = self.pendulum_state
+            l1 = self.pendulum_solver.l1
+            l2 = self.pendulum_solver.l2
 
-            # Bob 1 position (Panda3D coords: X, Z, Y)
-            b1_x = pivot_x + x1; b1_y = pivot_y + y1; b1_z = pivot_z
-            self.pendulum_nodes["bob1"].setPos(b1_x, b1_z, b1_y)
+            # Pivot Point P0 in Panda3D coords (X, Y_depth, Z_up)
+            p0 = Point3(0.0, -900.0, 20.0)
 
-            # Bob 2 position
-            b2_x = pivot_x + x2; b2_y = pivot_y + y2; b2_z = pivot_z
-            self.pendulum_nodes["bob2"].setPos(b2_x, b2_z, b2_y)
+            # Bob 1 position: x1 = l1 * sin(th1), z1 = -l1 * cos(th1)
+            x1 = float(l1 * np.sin(th1))
+            z1 = float(-l1 * np.cos(th1))
+            p1 = Point3(p0.getX() + x1, p0.getY(), p0.getZ() + z1)
+            self.pendulum_nodes["bob1"].setPos(p1)
 
-            # Rod 1 transform (from pivot to bob 1)
-            r1_mid_x = (pivot_x + b1_x) * 0.5
-            r1_mid_y = (pivot_y + b1_y) * 0.5
-            th1_deg = np.degrees(self.pendulum_state[0])
-            self.pendulum_nodes["rod1"].setPos(r1_mid_x, pivot_z, r1_mid_y)
-            self.pendulum_nodes["rod1"].setR(th1_deg)
+            # Bob 2 position: x2 = x1 + l2 * sin(th2), z2 = z1 - l2 * cos(th2)
+            x2 = float(x1 + l2 * np.sin(th2))
+            z2 = float(z1 - l2 * np.cos(th2))
+            p2 = Point3(p0.getX() + x2, p0.getY(), p0.getZ() + z2)
+            self.pendulum_nodes["bob2"].setPos(p2)
 
-            # Rod 2 transform (from bob 1 to bob 2)
-            r2_mid_x = (b1_x + b2_x) * 0.5
-            r2_mid_y = (b1_y + b2_y) * 0.5
-            th2_deg = np.degrees(self.pendulum_state[2])
-            self.pendulum_nodes["rod2"].setPos(r2_mid_x, pivot_z, r2_mid_y)
-            self.pendulum_nodes["rod2"].setR(th2_deg)
+            # Rod 1 starts at P0 and points directly at P1
+            self.pendulum_nodes["rod1"].setPos(p0)
+            self.pendulum_nodes["rod1"].lookAt(p1)
 
-            # Add tip to trajectory ribbon
-            self.trajectory_ribbon.add_point(np.array([b2_x, b2_y, b2_z]))
+            # Rod 2 starts at P1 and points directly at P2
+            self.pendulum_nodes["rod2"].setPos(p1)
+            self.pendulum_nodes["rod2"].lookAt(p2)
+
+            # Add tip of Bob 2 to trajectory ribbon
+            self.trajectory_ribbon.add_point(np.array([p2.getX(), p2.getZ(), p2.getY()]))
 
         # 2. Update Spring-Damper 3D Oscillator
         elif self.scenario_idx == 7 and self.spring_mesh_np and self.spring_mass_np:

@@ -264,8 +264,12 @@ class FlightHUDOverlay:
             f"STATUS: {on_ground_str}"
         )
 
-        sign_str = "+" if pitch_deg >= 0 else "-"
-        self.txt_pitch_ladder.setText(f"---[  {sign_str}{abs(int(pitch_deg)):02d}°  ]---")
+        pitch_sign = "+" if pitch_deg >= 0 else "-"
+        abs_pitch = int(abs(pitch_deg))
+        if ent_type in (EntityType.FIXED_WING_JET, EntityType.AIRFOIL_GLIDER):
+            self.txt_pitch_ladder.setText(f"---[  {pitch_sign}{abs_pitch:02d}°  ]---")
+        else:
+            self.txt_pitch_ladder.setText("")
 
         type_names = {
             EntityType.FIXED_WING_JET: "FIGHTER JET",

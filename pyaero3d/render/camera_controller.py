@@ -148,10 +148,12 @@ class FlightCameraController:
         return self.mode
 
     def focus_target(self, target_pos: np.ndarray) -> None:
-        """Snaps free view or orbit camera to frame target."""
-        self.free_cam_pos = target_pos + np.array([0.0, self.orbit_dist * 0.4, -self.orbit_dist * 0.9])
-        self.free_yaw = 0.0
-        self.free_pitch = -15.0
+        """Snaps free view or orbit camera to frame target with clear 3D perspective."""
+        self.orbit_yaw = 25.0
+        self.orbit_pitch = 12.0
+        self.free_cam_pos = target_pos + np.array([3.0, 2.0, -self.orbit_dist * 0.9])
+        self.free_yaw = 5.0
+        self.free_pitch = -8.0
 
     def update(
         self,
