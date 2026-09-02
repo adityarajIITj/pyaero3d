@@ -80,13 +80,13 @@ class MeshPrimitiveBuilder:
     def build_cylinder(
         radius: float = 0.08,
         length: float = 3.5,
+        axis: str = "y",
         segments: int = 24,
         color: Tuple[float, float, float, float] = (0.80, 0.85, 0.90, 1.0),
         name: str = "Cylinder",
     ) -> NodePath:
         """
-        Constructs a smooth, thin cylindrical rod mesh along +Y (forward axis in Panda3D)
-        from Y = 0 to Y = length, making it trivial to point from Point A to Point B.
+        Constructs a smooth cylindrical rod mesh with end caps and surface normals.
         """
         vdata = GeomVertexData(name, GeomVertexFormat.getV3n3c4(), Geom.UHDynamic)
         v_writer = GeomVertexWriter(vdata, "vertex")
@@ -96,19 +96,35 @@ class MeshPrimitiveBuilder:
 
         v_base = 0
 
-        # Bottom cap center (at Y = 0)
-        v_writer.addData3(0.0, 0.0, 0.0)
-        n_writer.addData3(0.0, -1.0, 0.0)
-        c_writer.addData4(*color)
-        bottom_center = 0
-        v_base += 1
+        # Cap Centers
+        if axis == "y":
+            v_writer.addData3(0.0, 0.0, 0.0)
+            n_writer.addData3(0.0, -1.0, 0.0)
+            c_writer.addData4(*color)
 
-        # Top cap center (at Y = length)
-        v_writer.addData3(0.0, length, 0.0)
-        n_writer.addData3(0.0, 1.0, 0.0)
-        c_writer.addData4(*color)
+            v_writer.addData3(0.0, length, 0.0)
+            n_writer.addData3(0.0, 1.0, 0.0)
+            c_writer.addData4(*color)
+        elif axis == "z":
+            v_writer.addData3(0.0, 0.0, -length * 0.5)
+            n_writer.addData3(0.0, 0.0, -1.0)
+            c_writer.addData4(*color)
+
+            v_writer.addData3(0.0, 0.0, length * 0.5)
+            n_writer.addData3(0.0, 0.0, 1.0)
+            c_writer.addData4(*color)
+        else:
+            v_writer.addData3(-length * 0.5, 0.0, 0.0)
+            n_writer.addData3(-1.0, 0.0, 0.0)
+            c_writer.addData4(*color)
+
+            v_writer.addData3(length * 0.5, 0.0, 0.0)
+            n_writer.addData3(1.0, 0.0, 0.0)
+            c_writer.addData4(*color)
+
+        bottom_center = 0
         top_center = 1
-        v_base += 1
+        v_base = 2
 
         bottom_ring = []
         top_ring = []
@@ -117,22 +133,37 @@ class MeshPrimitiveBuilder:
             angle = (i / float(segments)) * (2.0 * np.pi)
             ca = np.cos(angle)
             sa = np.sin(angle)
-            x = radius * ca
-            z = radius * sa
 
-            # Bottom ring vertex
-            v_writer.addData3(x, 0.0, z)
-            n_writer.addData3(ca, 0.0, sa)
-            c_writer.addData4(*color)
-            bottom_ring.append(v_base)
-            v_base += 1
+            if axis == "y":
+                v_writer.addData3(radius * ca, 0.0, radius * sa)
+                n_writer.addData3(ca, 0.0, sa)
+                c_writer.addData4(*color)
+                bottom_ring.append(v_base); v_base += 1
 
-            # Top ring vertex
-            v_writer.addData3(x, length, z)
-            n_writer.addData3(ca, 0.0, sa)
-            c_writer.addData4(*color)
-            top_ring.append(v_base)
-            v_base += 1
+                v_writer.addData3(radius * ca, length, radius * sa)
+                n_writer.addData3(ca, 0.0, sa)
+                c_writer.addData4(*color)
+                top_ring.append(v_base); v_base += 1
+            elif axis == "z":
+                v_writer.addData3(radius * ca, radius * sa, -length * 0.5)
+                n_writer.addData3(ca, sa, 0.0)
+                c_writer.addData4(*color)
+                bottom_ring.append(v_base); v_base += 1
+
+                v_writer.addData3(radius * ca, radius * sa, length * 0.5)
+                n_writer.addData3(ca, sa, 0.0)
+                c_writer.addData4(*color)
+                top_ring.append(v_base); v_base += 1
+            else:
+                v_writer.addData3(-length * 0.5, radius * ca, radius * sa)
+                n_writer.addData3(0.0, ca, sa)
+                c_writer.addData4(*color)
+                bottom_ring.append(v_base); v_base += 1
+
+                v_writer.addData3(length * 0.5, radius * ca, radius * sa)
+                n_writer.addData3(0.0, ca, sa)
+                c_writer.addData4(*color)
+                top_ring.append(v_base); v_base += 1
 
         for i in range(segments):
             b0 = bottom_ring[i]
