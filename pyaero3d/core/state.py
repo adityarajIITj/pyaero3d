@@ -77,6 +77,16 @@ class StateBuffer:
                 self._active_indices.remove(idx)
             self._free_indices.append(idx)
 
+    def clear(self) -> None:
+        """Deallocates all active entities and resets the free pool."""
+        self.data.fill(0.0)
+        self._free_indices = list(reversed(range(self.max_entities)))
+        self._active_indices = []
+
+    def reset(self) -> None:
+        """Alias for clear()."""
+        self.clear()
+
     def get_active_mask(self) -> np.ndarray:
         """Returns boolean mask of active entity rows."""
         return self.data[:, StateIdx.ACTIVE] > 0.5

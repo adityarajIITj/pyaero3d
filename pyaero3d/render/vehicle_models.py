@@ -17,6 +17,7 @@ from panda3d.core import (
 )
 
 from pyaero3d.core.types import EntityType
+from pyaero3d.render.mesh_primitives import MeshPrimitiveBuilder
 
 
 class VehicleModelBuilder:
@@ -497,116 +498,84 @@ class VehicleModelBuilder:
         return NodePath(node)
 
     @staticmethod
+    def create_cannon_projectile() -> NodePath:
+        """Builds high-detail smooth artillery projectile with cylindrical body and ogive nose."""
+        parent = NodePath("ArtilleryShell")
+        body = MeshPrimitiveBuilder.build_cylinder(
+            radius=0.45, length=2.2, axis="z", segments=20, color=(0.35, 0.40, 0.45, 1.0), name="ShellBody"
+        )
+        body.reparentTo(parent)
+
+        nose = MeshPrimitiveBuilder.build_uv_sphere(
+            radius=0.45, rings=14, sectors=20, color=(0.90, 0.92, 0.95, 1.0), name="ShellNose"
+        )
+        nose.reparentTo(parent)
+        nose.setPos(0.0, 0.0, 1.1)
+
+        band = MeshPrimitiveBuilder.build_cylinder(
+            radius=0.48, length=0.35, axis="z", segments=20, color=(0.85, 0.50, 0.20, 1.0), name="DrivingBand"
+        )
+        band.reparentTo(parent)
+        band.setPos(0.0, 0.0, -0.6)
+        return parent
+
+    @staticmethod
     def create_double_pendulum_rods() -> NodePath:
         """
-        Builds articulated dual metallic rods with pivot bearings and pendulum bobs.
+        Builds high-detail articulated double pendulum with smooth thin cylinders and UV spheres.
         """
-        vdata = GeomVertexData("PendulumMesh", GeomVertexFormat.getV3c4(), Geom.UHDynamic)
-        v_writer = GeomVertexWriter(vdata, "vertex")
-        c_writer = GeomVertexWriter(vdata, "color")
-        tris = GeomTriangles(Geom.UHDynamic)
+        parent = NodePath("DoublePendulumAssembly")
 
-        chrome_col = (0.75, 0.80, 0.85, 1.0)
-        bob1_col = (0.85, 0.25, 0.25, 1.0)
-        bob2_col = (0.25, 0.75, 0.95, 1.0)
+        # Upper Rod (L = 3.5m, r = 0.07m, chrome)
+        rod1 = MeshPrimitiveBuilder.build_cylinder(
+            radius=0.07, length=3.5, axis="z", segments=20, color=(0.85, 0.88, 0.92, 1.0), name="Rod1"
+        )
+        rod1.reparentTo(parent)
+        rod1.setPos(0.0, 0.0, -1.75)
 
-        # Rod 1 & Bob 1
-        pts = [
-            (0.0, 0.0, 0.0), (0.0, -1.8, 0.0), (0.3, -1.8, 0.0), (-0.3, -1.8, 0.0),
-            (0.0, -3.6, 0.0), (0.4, -3.6, 0.0), (-0.4, -3.6, 0.0),
-        ]
-        for idx, p in enumerate(pts):
-            v_writer.addData3(*p)
-            if idx in (1, 2, 3): c_writer.addData4(*bob1_col)
-            elif idx in (4, 5, 6): c_writer.addData4(*bob2_col)
-            else: c_writer.addData4(*chrome_col)
+        # Upper Bob 1 (Smooth UV Sphere, Brass / Amber Gold, R = 0.55m)
+        bob1 = MeshPrimitiveBuilder.build_uv_sphere(
+            radius=0.55, rings=16, sectors=24, color=(0.95, 0.65, 0.15, 1.0), name="Bob1"
+        )
+        bob1.reparentTo(parent)
+        bob1.setPos(0.0, 0.0, -3.5)
 
-        tri_list = [(0, 2, 1), (0, 1, 3), (1, 5, 4), (1, 4, 6)]
-        for (i0, i1, i2) in tri_list:
-            tris.addVertices(i0, i1, i2)
-            tris.addVertices(i0, i2, i1)
+        # Lower Rod (L = 3.5m, r = 0.07m, chrome)
+        rod2 = MeshPrimitiveBuilder.build_cylinder(
+            radius=0.07, length=3.5, axis="z", segments=20, color=(0.75, 0.80, 0.85, 1.0), name="Rod2"
+        )
+        rod2.reparentTo(parent)
+        rod2.setPos(0.0, 0.0, -5.25)
 
-        geom = Geom(vdata)
-        geom.addPrimitive(tris)
-        node = GeomNode("DoublePendulumNode")
-        node.addGeom(geom)
-        return NodePath(node)
+        # Lower Bob 2 (Smooth UV Sphere, Neon Electric Blue / Cyan, R = 0.65m)
+        bob2 = MeshPrimitiveBuilder.build_uv_sphere(
+            radius=0.65, rings=16, sectors=24, color=(0.15, 0.85, 1.0, 1.0), name="Bob2"
+        )
+        bob2.reparentTo(parent)
+        bob2.setPos(0.0, 0.0, -7.0)
+
+        return parent
 
     @staticmethod
     def create_cyclotron_chamber() -> NodePath:
-        """
-        Builds electromagnetic cyclotron field chamber with glowing central particle.
-        """
-        vdata = GeomVertexData("CyclotronMesh", GeomVertexFormat.getV3c4(), Geom.UHDynamic)
-        v_writer = GeomVertexWriter(vdata, "vertex")
-        c_writer = GeomVertexWriter(vdata, "color")
-        tris = GeomTriangles(Geom.UHDynamic)
+        """Builds electromagnetic cyclotron field chamber with glowing central particle."""
+        parent = NodePath("CyclotronAssembly")
+        particle = MeshPrimitiveBuilder.build_uv_sphere(
+            radius=0.6, rings=16, sectors=20, color=(0.10, 0.95, 0.65, 1.0), name="CycloParticle"
+        )
+        particle.reparentTo(parent)
 
-        magnet_col = (0.20, 0.22, 0.28, 0.9)
-        glow_col = (0.10, 0.95, 0.65, 1.0)
-
-        # Outer electromagnetic pole rings
-        r_c = 2.5
-        v_writer.addData3(0.0, 0.0, 0.0) # Central particle
-        c_writer.addData4(*glow_col)
-
-        for ang_deg in [0, 60, 120, 180, 240, 300]:
-            rad = np.radians(ang_deg)
-            v_writer.addData3(r_c * np.cos(rad), 0.8, r_c * np.sin(rad))
-            c_writer.addData4(*magnet_col)
-            v_writer.addData3(r_c * np.cos(rad), -0.8, r_c * np.sin(rad))
-            c_writer.addData4(*magnet_col)
-
-        tri_list = [
-            (0, 1, 3), (0, 3, 5), (0, 5, 7), (0, 7, 9), (0, 9, 11), (0, 11, 1),
-            (0, 2, 4), (0, 4, 6), (0, 6, 8), (0, 8, 10), (0, 10, 12), (0, 12, 2),
-        ]
-        for (i0, i1, i2) in tri_list:
-            tris.addVertices(i0, i1, i2)
-            tris.addVertices(i0, i2, i1)
-
-        geom = Geom(vdata)
-        geom.addPrimitive(tris)
-        node = GeomNode("CyclotronNode")
-        node.addGeom(geom)
-        return NodePath(node)
+        ring = MeshPrimitiveBuilder.build_helical_spring(
+            radius=2.5, length=1.2, coils=4, wire_radius=0.08, color=(0.20, 0.50, 0.85, 0.9)
+        )
+        ring.reparentTo(parent)
+        return parent
 
     @staticmethod
     def create_bouncing_sphere() -> NodePath:
-        """
-        Builds high-visibility viscoelastic restitution bouncing sphere.
-        """
-        vdata = GeomVertexData("SphereMesh", GeomVertexFormat.getV3c4(), Geom.UHDynamic)
-        v_writer = GeomVertexWriter(vdata, "vertex")
-        c_writer = GeomVertexWriter(vdata, "color")
-        tris = GeomTriangles(Geom.UHDynamic)
-
-        neon_col = (0.95, 0.80, 0.10, 1.0)
-        core_col = (0.85, 0.30, 0.10, 1.0)
-
-        r = 1.2
-        # Octahedron sphere base
-        v_writer.addData3(0.0, r, 0.0)
-        v_writer.addData3(0.0, -r, 0.0)
-        v_writer.addData3(r, 0.0, 0.0)
-        v_writer.addData3(-r, 0.0, 0.0)
-        v_writer.addData3(0.0, 0.0, r)
-        v_writer.addData3(0.0, 0.0, -r)
-        for i in range(6):
-            c_writer.addData4(*(neon_col if i % 2 == 0 else core_col))
-
-        tri_list = [
-            (0, 2, 4), (0, 4, 3), (0, 3, 5), (0, 5, 2),
-            (1, 4, 2), (1, 3, 4), (1, 5, 3), (1, 2, 5),
-        ]
-        for (i0, i1, i2) in tri_list:
-            tris.addVertices(i0, i1, i2)
-            tris.addVertices(i0, i2, i1)
-
-        geom = Geom(vdata)
-        geom.addPrimitive(tris)
-        node = GeomNode("BouncingSphereNode")
-        node.addGeom(geom)
-        return NodePath(node)
+        """Builds smooth high-poly UV sphere with glowing core."""
+        return MeshPrimitiveBuilder.build_uv_sphere(
+            radius=1.2, rings=20, sectors=28, color=(0.95, 0.75, 0.10, 1.0), name="BouncingSphere"
+        )
 
     create_quadrotor = create_quadrotor_drone

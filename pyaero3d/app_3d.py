@@ -127,6 +127,7 @@ class PyAero3DSimulatorApp(ShowBase):
 
         # 9. Visual Actor Nodes Mapping
         self.actor_nodes: Dict[int, NodePath] = {}
+        self.scenario_props: List[NodePath] = []
         self.current_controlled_idx = 0
 
         # 10. Interactive In-Viewport 3D Control Panel
@@ -226,6 +227,9 @@ class PyAero3DSimulatorApp(ShowBase):
         for node in self.actor_nodes.values():
             node.removeNode()
         self.actor_nodes.clear()
+        for prop in self.scenario_props:
+            prop.removeNode()
+        self.scenario_props.clear()
         self.state_buffer.clear()
         self._spawn_preset_scenario(self.scenario_idx)
         self._update_panel_readouts()
@@ -439,6 +443,7 @@ class PyAero3DSimulatorApp(ShowBase):
         stand_np = SpatialReferenceBuilder.create_pendulum_stand()
         stand_np.reparentTo(self.render)
         stand_np.setPos(0.0, -900.0, 0.0)
+        self.scenario_props.append(stand_np)
 
         idx = self.state_buffer.allocate_entity(
             entity_type=EntityType.DOUBLE_PENDULUM,
