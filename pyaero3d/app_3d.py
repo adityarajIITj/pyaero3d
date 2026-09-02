@@ -1,11 +1,11 @@
 """
 PyAero3D - 3D Panda3D Mountain Simulation & Interactive Multi-Scenario Sandbox Application.
-Integrates Free View 3D Camera, In-Viewport Control Panel, 3D Spatial Gizmos, and Real-Time Trajectory Ribbons.
+Integrates Free View 3D Camera, Real-Time Articulated Physical Solvers, In-Viewport Controls, and Trajectory Ribbons.
 """
 
 import sys
 import numpy as np
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
@@ -29,11 +29,12 @@ load_prc_file_data("", """
     gl-version 3 2
 """)
 
-from pyaero3d.core.types import StateIdx, EntityType
+from pyaero3d.core.types import StateIdx, EntityType, STANDARD_GRAVITY
 from pyaero3d.core.state import StateBuffer
 from pyaero3d.render.terrain_gen import MountainTerrainGenerator
 from pyaero3d.render.sky_dome import EnvironmentGeometryBuilder
 from pyaero3d.render.vehicle_models import VehicleModelBuilder
+from pyaero3d.render.mesh_primitives import MeshPrimitiveBuilder
 from pyaero3d.render.camera_controller import FlightCameraController, CameraMode
 from pyaero3d.render.spatial_references import SpatialReferenceBuilder, Dynamic3DTrajectoryRibbon
 from pyaero3d.ui.hud_overlay import FlightHUDOverlay
@@ -42,6 +43,11 @@ from pyaero3d.controls.flight_yoke import FlightYokeController
 from pyaero3d.physics.engine_thread import PhysicsEngineThread
 from pyaero3d.physics.fragmentation import FragmentationEngine
 from pyaero3d.physics.mountain_collision import MountainCollisionEngine
+from pyaero3d.physics.advanced_solvers import (
+    ChaoticDoublePendulumSolver,
+    LorentzParticleSolver,
+    OrbitalMechanicsSolver,
+)
 
 
 class PyAero3DSimulatorApp(ShowBase):
@@ -67,8 +73,8 @@ class PyAero3DSimulatorApp(ShowBase):
         # Scenario & Physical Parameters
         self.scenario_idx = scenario_idx
         self.curr_v0 = v0 if v0 is not None else 220.0
-        self.curr_theta = theta if theta is not None else (45.0 if scenario_idx == 0 else 5.0)
-        self.curr_mass = mass if mass is not None else (15.0 if scenario_idx == 0 else (12000.0 if scenario_idx == 1 else 650.0))
+        self.curr_theta = theta if theta is not None else (45.0 if scenario_idx == 0 else (60.0 if scenario_idx == 5 else 5.0))
+        self.curr_mass = mass if mass is not None else (15.0 if scenario_idx == 0 else (12000.0 if scenario_idx == 1 else 10.0))
         self.curr_cd = cd if cd is not None else (0.30 if scenario_idx == 0 else 0.024)
         self.curr_area = area if area is not None else 28.0
         self.curr_wind = wind if wind is not None else 0.0
@@ -102,7 +108,7 @@ class PyAero3DSimulatorApp(ShowBase):
         self.grid_np.reparentTo(self.render)
         self.grid_np.setPos(0.0, -1000.0, 0.0)
 
-        self.trajectory_ribbon = Dynamic3DTrajectoryRibbon(self.render, max_points=500, color=(0.15, 0.85, 1.0, 0.95))
+        self.trajectory_ribbon = Dynamic3DTrajectoryRibbon(self.render, max_points=600, color=(0.15, 0.85, 1.0, 0.95))
 
         # 4. Sunlight & Ambient Lighting
         self._setup_lighting()
@@ -129,6 +135,17 @@ class PyAero3DSimulatorApp(ShowBase):
         self.actor_nodes: Dict[int, NodePath] = {}
         self.scenario_props: List[NodePath] = []
         self.current_controlled_idx = 0
+
+        # Dedicated Scenario Physical Solvers
+        self.pendulum_solver = ChaoticDoublePendulumSolver(l1=3.5, l2=3.5, m1=self.curr_mass, m2=self.curr_mass)
+        self.pendulum_state = np.array([np.radians(60.0), 0.0, np.radians(90.0), 0.0], dtype=np.float64)
+        self.pendulum_nodes: Dict[str, NodePath] = {}
+
+        # Spring Oscillator state
+        self.spring_y = 0.0
+        self.spring_vy = 0.0
+        self.spring_mesh_np: Optional[NodePath] = None
+        self.spring_mass_np: Optional[NodePath] = None
 
         # 10. Interactive In-Viewport 3D Control Panel
         self.control_panel = InViewportControlPanel3D(
@@ -189,13 +206,23 @@ class PyAero3DSimulatorApp(ShowBase):
         self.accept("f", lambda: self.cam_controller.focus_target(self._get_target_pos()))
 
     def _get_target_pos(self) -> np.ndarray:
+        if self.scenario_idx == 5:
+            return np.array([0.0, 16.0, -900.0])
+        elif self.scenario_idx == 7:
+            return np.array([0.0, 12.0, -900.0])
+
         if 0 <= self.current_controlled_idx < self.state_buffer.max_entities:
             if self.state_buffer.data[self.current_controlled_idx, StateIdx.ACTIVE] > 0.5:
-                return self.state_buffer.data[self.current_controlled_idx, StateIdx.PX:StateIdx.PZ + 1]
+                pos = self.state_buffer.data[self.current_controlled_idx, StateIdx.PX:StateIdx.PZ + 1]
+                if not (np.isnan(pos).any() or np.isinf(pos).any()):
+                    return pos
         return np.array([0.0, 10.0, -1000.0])
 
     def tweak_mass(self, delta_pct: float) -> None:
         self.curr_mass = max(0.1, self.curr_mass * (1.0 + delta_pct))
+        if self.scenario_idx == 5:
+            self.pendulum_solver.m1 = self.curr_mass
+            self.pendulum_solver.m2 = self.curr_mass
         if 0 <= self.current_controlled_idx < self.state_buffer.max_entities:
             self.state_buffer.data[self.current_controlled_idx, StateIdx.MASS] = self.curr_mass
         self._update_panel_readouts()
@@ -212,6 +239,8 @@ class PyAero3DSimulatorApp(ShowBase):
 
     def tweak_angle(self, delta_deg: float) -> None:
         self.curr_theta = np.clip(self.curr_theta + delta_deg, 0.0, 90.0)
+        if self.scenario_idx == 5:
+            self.pendulum_state = np.array([np.radians(self.curr_theta), 0.0, np.radians(self.curr_theta + 30.0), 0.0], dtype=np.float64)
         self._update_panel_readouts()
 
     def _update_panel_readouts(self) -> None:
@@ -230,6 +259,12 @@ class PyAero3DSimulatorApp(ShowBase):
         for prop in self.scenario_props:
             prop.removeNode()
         self.scenario_props.clear()
+        for pn in self.pendulum_nodes.values():
+            pn.removeNode()
+        self.pendulum_nodes.clear()
+        if self.spring_mesh_np: self.spring_mesh_np.removeNode(); self.spring_mesh_np = None
+        if self.spring_mass_np: self.spring_mass_np.removeNode(); self.spring_mass_np = None
+
         self.state_buffer.clear()
         self._spawn_preset_scenario(self.scenario_idx)
         self._update_panel_readouts()
@@ -246,6 +281,8 @@ class PyAero3DSimulatorApp(ShowBase):
     def step_physics(self) -> None:
         if self.is_paused:
             self.physics_thread.engine.step(0.01)
+            if self.scenario_idx == 5:
+                self.pendulum_state = self.pendulum_solver.rk4_step(self.pendulum_state, 0.01)
 
     def set_camera_mode(self, mode_int: int) -> None:
         self.cam_controller.set_mode(CameraMode(mode_int))
@@ -279,7 +316,7 @@ class PyAero3DSimulatorApp(ShowBase):
             "4: Keplerian Orbital Satellite",
             "5: Chaotic Double Pendulum",
             "6: Lorentz Particle Cyclotron",
-            "7: Viscoelastic Bouncing Spheres",
+            "7: Viscoelastic Spring-Damper",
         ]
         scen_name = scenario_names[idx] if idx < len(scenario_names) else f"Preset #{idx}"
         self.hud.txt_scenario_header.setText(f"ACTIVE 3D PRESET: {scen_name.upper()}")
@@ -300,14 +337,14 @@ class PyAero3DSimulatorApp(ShowBase):
             self.curr_mass = 2400.0; self.curr_cd = 0.01; self.curr_thrust = 5000.0
             return self.spawn_orbital_satellite()
         elif idx == 5:  # Double Pendulum
-            self.curr_mass = 10.0; self.curr_cd = 0.05
+            self.curr_mass = 10.0; self.curr_cd = 0.05; self.curr_theta = 60.0
             return self.spawn_double_pendulum()
         elif idx == 6:  # Lorentz Particle Cyclotron
             self.curr_mass = 1.0; self.curr_cd = 0.0
             return self.spawn_cyclotron_particle()
-        elif idx == 7:  # Bouncing Viscoelastic Spheres
+        elif idx == 7:  # Spring-Damper Oscillator
             self.curr_mass = 25.0; self.curr_cd = 0.45
-            return self.spawn_bouncing_spheres()
+            return self.spawn_spring_damper_system()
         else:
             return self.spawn_fighter_jet_airborne()
 
@@ -339,7 +376,8 @@ class PyAero3DSimulatorApp(ShowBase):
 
     def spawn_cannon_projectile(self) -> int:
         theta_rad = np.radians(self.curr_theta)
-        init_pos = np.array([0.0, 5.0, -1200.0], dtype=np.float64)
+        ground_y = self.terrain_gen.get_height(0.0, -1200.0)
+        init_pos = np.array([0.0, ground_y + 15.0, -1200.0], dtype=np.float64)
         init_vel = np.array([0.0, self.curr_v0 * np.sin(theta_rad), self.curr_v0 * np.cos(theta_rad)], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
@@ -436,34 +474,55 @@ class PyAero3DSimulatorApp(ShowBase):
         return idx
 
     def spawn_double_pendulum(self) -> int:
-        init_pos = np.array([0.0, 20.0, -900.0], dtype=np.float64)
-        init_vel = np.array([5.0, 0.0, 0.0], dtype=np.float64)
+        pivot_pos = np.array([0.0, 20.0, -900.0])
 
-        # Attach mounting frame stand
+        # Floor Mounting Stand
         stand_np = SpatialReferenceBuilder.create_pendulum_stand()
         stand_np.reparentTo(self.render)
         stand_np.setPos(0.0, -900.0, 0.0)
         self.scenario_props.append(stand_np)
 
-        idx = self.state_buffer.allocate_entity(
-            entity_type=EntityType.DOUBLE_PENDULUM,
-            mass=self.curr_mass,
-            position=init_pos,
-            velocity=init_vel,
-            radius=3.0,
-            cd=self.curr_cd,
-            area=1.0,
+        # Pivot Bearing Housing
+        pivot_housing = MeshPrimitiveBuilder.build_cylinder(
+            radius=0.25, length=0.6, axis="z", color=(0.95, 0.75, 0.20, 1.0), name="PivotHousing"
         )
+        pivot_housing.reparentTo(self.render)
+        pivot_housing.setPos(0.0, -900.0, 20.0)
+        self.scenario_props.append(pivot_housing)
 
-        actor_np = VehicleModelBuilder.create_double_pendulum_rods()
-        actor_np.reparentTo(self.render)
-        self.actor_nodes[idx] = actor_np
-        self.current_controlled_idx = idx
-        self.yoke.set_target_entity(idx)
-        self.cam_controller.set_target_scale(4.0)
-        self.cam_controller.focus_target(init_pos)
-        print(f"[PyAero3D] Spawned 3D Articulated Double Pendulum (Entity #{idx}).")
-        return idx
+        # Rod 1 & Bob 1
+        rod1 = MeshPrimitiveBuilder.build_cylinder(
+            radius=0.08, length=3.5, axis="y", segments=20, color=(0.85, 0.88, 0.92, 1.0), name="Rod1"
+        )
+        rod1.reparentTo(self.render)
+        self.pendulum_nodes["rod1"] = rod1
+
+        bob1 = MeshPrimitiveBuilder.build_uv_sphere(
+            radius=0.55, rings=16, sectors=24, color=(0.95, 0.65, 0.15, 1.0), name="Bob1"
+        )
+        bob1.reparentTo(self.render)
+        self.pendulum_nodes["bob1"] = bob1
+
+        # Rod 2 & Bob 2
+        rod2 = MeshPrimitiveBuilder.build_cylinder(
+            radius=0.08, length=3.5, axis="y", segments=20, color=(0.75, 0.80, 0.85, 1.0), name="Rod2"
+        )
+        rod2.reparentTo(self.render)
+        self.pendulum_nodes["rod2"] = rod2
+
+        bob2 = MeshPrimitiveBuilder.build_uv_sphere(
+            radius=0.65, rings=16, sectors=24, color=(0.15, 0.85, 1.0, 1.0), name="Bob2"
+        )
+        bob2.reparentTo(self.render)
+        self.pendulum_nodes["bob2"] = bob2
+
+        self.pendulum_solver = ChaoticDoublePendulumSolver(l1=3.5, l2=3.5, m1=self.curr_mass, m2=self.curr_mass)
+        self.pendulum_state = np.array([np.radians(self.curr_theta), 0.0, np.radians(self.curr_theta + 30.0), 0.0], dtype=np.float64)
+
+        self.cam_controller.set_target_scale(4.5)
+        self.cam_controller.focus_target(pivot_pos)
+        print(f"[PyAero3D] Initialized 3D Articulated Double Pendulum at ({pivot_pos[0]}, {pivot_pos[1]}, {pivot_pos[2]}).")
+        return 0
 
     def spawn_cyclotron_particle(self) -> int:
         init_pos = np.array([0.0, 30.0, -800.0], dtype=np.float64)
@@ -489,42 +548,107 @@ class PyAero3DSimulatorApp(ShowBase):
         print(f"[PyAero3D] Spawned 3D Lorentz Particle Cyclotron (Entity #{idx}).")
         return idx
 
-    def spawn_bouncing_spheres(self) -> int:
-        init_pos = np.array([0.0, 850.0, -200.0], dtype=np.float64)
-        init_vel = np.array([15.0, 5.0, 40.0], dtype=np.float64)
+    def spawn_spring_damper_system(self) -> int:
+        """Spawns 3D viscoelastic harmonic oscillator with dynamic coil spring and weight."""
+        mount_pos = np.array([0.0, 20.0, -900.0])
 
-        idx = self.state_buffer.allocate_entity(
-            entity_type=EntityType.BOUNCING_SPHERE,
-            mass=self.curr_mass,
-            position=init_pos,
-            velocity=init_vel,
-            radius=1.5,
-            cd=self.curr_cd,
-            area=1.8,
+        # Floor mounting frame
+        stand_np = SpatialReferenceBuilder.create_pendulum_stand()
+        stand_np.reparentTo(self.render)
+        stand_np.setPos(0.0, -900.0, 0.0)
+        self.scenario_props.append(stand_np)
+
+        # Helical Spring
+        self.spring_mesh_np = MeshPrimitiveBuilder.build_helical_spring(
+            radius=0.9, length=8.0, coils=9, wire_radius=0.09, color=(0.95, 0.75, 0.15, 1.0)
         )
+        self.spring_mesh_np.reparentTo(self.render)
+        self.spring_mesh_np.setPos(0.0, -900.0, 16.0)
 
-        actor_np = VehicleModelBuilder.create_bouncing_sphere()
-        actor_np.reparentTo(self.render)
-        self.actor_nodes[idx] = actor_np
-        self.current_controlled_idx = idx
-        self.yoke.set_target_entity(idx)
-        self.cam_controller.set_target_scale(3.0)
-        self.cam_controller.focus_target(init_pos)
-        print(f"[PyAero3D] Spawned Viscoelastic Bouncing Sphere (Entity #{idx}).")
-        return idx
+        # Mass block
+        self.spring_mass_np = MeshPrimitiveBuilder.build_uv_sphere(
+            radius=1.4, rings=18, sectors=24, color=(0.20, 0.65, 0.95, 1.0), name="SpringMass"
+        )
+        self.spring_mass_np.reparentTo(self.render)
+        self.spring_mass_np.setPos(0.0, -900.0, 12.0)
+
+        self.spring_y = -3.0
+        self.spring_vy = 0.0
+        self.cam_controller.set_target_scale(4.0)
+        self.cam_controller.focus_target(mount_pos)
+        print(f"[PyAero3D] Spawned 3D Spring-Damper Oscillator.")
+        return 0
 
     def _render_frame_update(self, task):
         dt = globalClock.getDt()
+        if dt > 0.1: dt = 0.016  # Clamp timestep spikes
 
-        # Update controls
+        # Update flight controls
         self.yoke.update(dt)
 
-        # Get double-buffered physics snapshot
+        # 1. Update Double Pendulum 3D Physical Articulation
+        if self.scenario_idx == 5 and len(self.pendulum_nodes) == 4:
+            if not self.is_paused:
+                # RK4 integration substeps for stability
+                for _ in range(4):
+                    self.pendulum_state = self.pendulum_solver.rk4_step(self.pendulum_state, dt * 0.25)
+
+            x1, y1, x2, y2 = self.pendulum_solver.get_cartesian_positions(self.pendulum_state)
+            pivot_x = 0.0; pivot_y = 20.0; pivot_z = -900.0
+
+            # Bob 1 position (Panda3D coords: X, Z, Y)
+            b1_x = pivot_x + x1; b1_y = pivot_y + y1; b1_z = pivot_z
+            self.pendulum_nodes["bob1"].setPos(b1_x, b1_z, b1_y)
+
+            # Bob 2 position
+            b2_x = pivot_x + x2; b2_y = pivot_y + y2; b2_z = pivot_z
+            self.pendulum_nodes["bob2"].setPos(b2_x, b2_z, b2_y)
+
+            # Rod 1 transform (from pivot to bob 1)
+            r1_mid_x = (pivot_x + b1_x) * 0.5
+            r1_mid_y = (pivot_y + b1_y) * 0.5
+            th1_deg = np.degrees(self.pendulum_state[0])
+            self.pendulum_nodes["rod1"].setPos(r1_mid_x, pivot_z, r1_mid_y)
+            self.pendulum_nodes["rod1"].setR(th1_deg)
+
+            # Rod 2 transform (from bob 1 to bob 2)
+            r2_mid_x = (b1_x + b2_x) * 0.5
+            r2_mid_y = (b1_y + b2_y) * 0.5
+            th2_deg = np.degrees(self.pendulum_state[2])
+            self.pendulum_nodes["rod2"].setPos(r2_mid_x, pivot_z, r2_mid_y)
+            self.pendulum_nodes["rod2"].setR(th2_deg)
+
+            # Add tip to trajectory ribbon
+            self.trajectory_ribbon.add_point(np.array([b2_x, b2_y, b2_z]))
+
+        # 2. Update Spring-Damper 3D Oscillator
+        elif self.scenario_idx == 7 and self.spring_mesh_np and self.spring_mass_np:
+            if not self.is_paused:
+                k_spring = 80.0
+                c_damp = 1.5
+                acc_y = (-k_spring * self.spring_y - c_damp * self.spring_vy) / max(1.0, self.curr_mass)
+                self.spring_vy += acc_y * dt
+                self.spring_y += self.spring_vy * dt
+
+            mass_y = 12.0 + self.spring_y
+            self.spring_mass_np.setPos(0.0, -900.0, mass_y)
+            scale_y = max(0.2, (20.0 - mass_y) / 8.0)
+            self.spring_mesh_np.setSz(scale_y)
+            self.spring_mesh_np.setPos(0.0, -900.0, 20.0 - 4.0 * scale_y)
+            self.trajectory_ribbon.add_point(np.array([0.0, mass_y, -900.0]))
+
+        # 3. Update Standard Rigid Body Entities from StateBuffer
         snapshot = self.physics_thread.get_render_snapshot()
         active_mask = snapshot[:, StateIdx.ACTIVE] > 0.5
         active_indices = np.where(active_mask)[0]
 
-        # Sync 3D Visual Actors
+        # Clean up deallocated / dead visual actor nodes
+        dead_indices = [i for i in self.actor_nodes if i not in active_indices]
+        for dead_idx in dead_indices:
+            dead_node = self.actor_nodes.pop(dead_idx, None)
+            if dead_node:
+                dead_node.removeNode()
+
         for idx in active_indices:
             row = snapshot[idx]
             ent_type = int(row[StateIdx.ENTITY_TYPE])
@@ -546,8 +670,6 @@ class PyAero3DSimulatorApp(ShowBase):
                     actor_np = VehicleModelBuilder.create_airfoil_wing()
                 elif ent_type == EntityType.ORBITAL_SATELLITE:
                     actor_np = VehicleModelBuilder.create_satellite()
-                elif ent_type == EntityType.DOUBLE_PENDULUM:
-                    actor_np = VehicleModelBuilder.create_double_pendulum_rods()
                 elif ent_type == EntityType.LORENTZ_PARTICLE:
                     actor_np = VehicleModelBuilder.create_cyclotron_chamber()
                 elif ent_type == EntityType.BOUNCING_SPHERE:
@@ -562,27 +684,40 @@ class PyAero3DSimulatorApp(ShowBase):
             if node:
                 pos = row[StateIdx.PX:StateIdx.PZ + 1]
                 quat = row[StateIdx.QW:StateIdx.QZ + 1]
+
+                # Defensive NaN / Inf guards
+                if np.isnan(pos).any() or np.isinf(pos).any():
+                    pos = np.array([0.0, 10.0, -1000.0])
+                q_len = float(np.linalg.norm(quat))
+                if np.isnan(quat).any() or np.isinf(quat).any() or q_len < 1e-4:
+                    quat = np.array([1.0, 0.0, 0.0, 0.0])
+                else:
+                    quat = quat / q_len
+
                 node.setPos(pos[0], pos[2], pos[1])
                 node.setQuat(LQuaternionf(quat[0], quat[1], quat[3], quat[2]))
 
-                # Add to dynamic 3D trajectory ribbon if primary controlled target
-                if idx == self.current_controlled_idx:
+                if idx == self.current_controlled_idx and self.scenario_idx not in (5, 7):
                     self.trajectory_ribbon.add_point(pos)
 
-        # Update Camera Controller
-        target_row = snapshot[self.current_controlled_idx] if self.current_controlled_idx in active_indices else None
-        if target_row is not None:
-            t_pos = target_row[StateIdx.PX:StateIdx.PZ + 1]
-            t_quat = target_row[StateIdx.QW:StateIdx.QZ + 1]
-            t_vel = target_row[StateIdx.VX:StateIdx.VZ + 1]
-            self.cam_controller.update(t_pos, t_quat, t_vel, dt)
-        else:
-            self.cam_controller.update(np.zeros(3), np.array([1, 0, 0, 0]), np.zeros(3), dt)
+        # 4. Update Camera Controller
+        target_pos = self._get_target_pos()
+        target_quat = np.array([1.0, 0.0, 0.0, 0.0])
+        target_vel = np.zeros(3)
 
-        # Update HUD Telemetry
-        ground_h = 0.0
-        if target_row is not None:
-            ground_h = self.terrain_gen.get_height(target_row[StateIdx.PX], target_row[StateIdx.PZ])
+        if 0 <= self.current_controlled_idx < self.state_buffer.max_entities and self.current_controlled_idx in active_indices:
+            r = snapshot[self.current_controlled_idx]
+            q = r[StateIdx.QW:StateIdx.QZ + 1]
+            v = r[StateIdx.VX:StateIdx.VZ + 1]
+            if not (np.isnan(q).any() or np.isinf(q).any() or np.linalg.norm(q) < 1e-4):
+                target_quat = q
+            if not (np.isnan(v).any() or np.isinf(v).any()):
+                target_vel = v
+
+        self.cam_controller.update(target_pos, target_quat, target_vel, dt)
+
+        # 5. Update HUD Telemetry
+        ground_h = self.terrain_gen.get_height(target_pos[0], target_pos[2])
         self.hud.update(
             state_snapshot=snapshot,
             controlled_idx=self.current_controlled_idx,
