@@ -148,6 +148,12 @@ python run_benchmark.py
 
 ---
 
+## Author & Maintainer
+
+- **Aditya Raj** ([@adityarajIITj](https://github.com/adityarajIITj))
+
+---
+
 ## License
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
