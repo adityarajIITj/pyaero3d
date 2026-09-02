@@ -1,6 +1,6 @@
 """
-PyAero3D - 3D Panda3D Mountain Simulation & Multi-Vehicle Sandbox Application.
-Supports all 8 physical presets launched seamlessly from the XY Graph Studio or CLI.
+PyAero3D - 3D Panda3D Mountain Simulation & Interactive Multi-Scenario Sandbox Application.
+Integrates Free View 3D Camera, In-Viewport Control Panel, 3D Spatial Gizmos, and Real-Time Trajectory Ribbons.
 """
 
 import sys
@@ -16,11 +16,12 @@ from panda3d.core import (
     AmbientLight,
     NodePath,
     LQuaternionf,
+    Point3,
 )
 
 # Panda3D Window & Graphics Configuration
 load_prc_file_data("", """
-    window-title PyAero3D // Mountain World Simulation & Multi-Scenario Sandbox (3D)
+    window-title PyAero3D // Interactive 3D Multi-Physics & Aerospace Sandbox
     win-size 1600 900
     sync-video #t
     show-frame-rate-meter #t
@@ -33,8 +34,10 @@ from pyaero3d.core.state import StateBuffer
 from pyaero3d.render.terrain_gen import MountainTerrainGenerator
 from pyaero3d.render.sky_dome import EnvironmentGeometryBuilder
 from pyaero3d.render.vehicle_models import VehicleModelBuilder
-from pyaero3d.render.camera_controller import FlightCameraController
+from pyaero3d.render.camera_controller import FlightCameraController, CameraMode
+from pyaero3d.render.spatial_references import SpatialReferenceBuilder, Dynamic3DTrajectoryRibbon
 from pyaero3d.ui.hud_overlay import FlightHUDOverlay
+from pyaero3d.ui.control_panel_3d import InViewportControlPanel3D
 from pyaero3d.controls.flight_yoke import FlightYokeController
 from pyaero3d.physics.engine_thread import PhysicsEngineThread
 from pyaero3d.physics.fragmentation import FragmentationEngine
@@ -61,14 +64,17 @@ class PyAero3DSimulatorApp(ShowBase):
         self.disableMouse()
         self.setBackgroundColor(0.05, 0.05, 0.08, 1.0)
 
+        # Scenario & Physical Parameters
         self.scenario_idx = scenario_idx
-        self.param_v0 = v0
-        self.param_theta = theta
-        self.param_mass = mass
-        self.param_cd = cd
-        self.param_area = area
-        self.param_wind = wind
-        self.param_thrust = thrust
+        self.curr_v0 = v0 if v0 is not None else 220.0
+        self.curr_theta = theta if theta is not None else (45.0 if scenario_idx == 0 else 5.0)
+        self.curr_mass = mass if mass is not None else (15.0 if scenario_idx == 0 else (12000.0 if scenario_idx == 1 else 650.0))
+        self.curr_cd = cd if cd is not None else (0.30 if scenario_idx == 0 else 0.024)
+        self.curr_area = area if area is not None else 28.0
+        self.curr_wind = wind if wind is not None else 0.0
+        self.curr_thrust = thrust if thrust is not None else (85000.0 if scenario_idx == 1 else 0.0)
+
+        self.is_paused = False
 
         # Configure Camera Lens FOV
         self.camLens.setFov(75)
@@ -87,50 +93,66 @@ class PyAero3DSimulatorApp(ShowBase):
         self.runway = EnvironmentGeometryBuilder.create_runway_strip(elevation=1.0)
         self.runway.reparentTo(self.render)
 
-        # 3. Sunlight & Ambient Lighting
+        # 3. 3D Spatial Reference Gizmos (XYZ Axes, Ground Grid, Trajectory Ribbon)
+        self.axes_np = SpatialReferenceBuilder.create_coordinate_axes(length=25.0)
+        self.axes_np.reparentTo(self.render)
+        self.axes_np.setPos(0.0, -1000.0, 2.0)
+
+        self.grid_np = SpatialReferenceBuilder.create_ground_grid(size=300.0, step=15.0, elevation=1.5)
+        self.grid_np.reparentTo(self.render)
+        self.grid_np.setPos(0.0, -1000.0, 0.0)
+
+        self.trajectory_ribbon = Dynamic3DTrajectoryRibbon(self.render, max_points=500, color=(0.15, 0.85, 1.0, 0.95))
+
+        # 4. Sunlight & Ambient Lighting
         self._setup_lighting()
 
-        # 4. Collision & Fragmentation Engines
+        # 5. Collision & Fragmentation Engines
         self.collision_engine = MountainCollisionEngine(self.terrain_gen)
         self.fragmentation_engine = FragmentationEngine
 
-        # 5. 1000Hz Background Physics Engine Thread
+        # 6. 1000Hz Background Physics Engine Thread
         self.physics_thread = PhysicsEngineThread(
             state_buffer=self.state_buffer,
             collision_engine=self.collision_engine,
             target_hz=1000.0,
         )
 
-        # 6. Glass Cockpit Telemetry HUD & Input Yoke
+        # 7. Dynamic Camera Controller (Supports Free View & 3D Mouse Orbit)
+        self.cam_controller = FlightCameraController(self.camera, base_app=self)
+
+        # 8. Glass Cockpit Telemetry HUD & Input Yoke
         self.hud = FlightHUDOverlay()
         self.yoke = FlightYokeController(self, self.state_buffer)
 
-        # 7. Dynamic Camera Controller
-        self.cam_controller = FlightCameraController(self.camera)
-
-        # 8. Visual Actor Nodes Mapping
+        # 9. Visual Actor Nodes Mapping
         self.actor_nodes: Dict[int, NodePath] = {}
         self.current_controlled_idx = 0
 
-        # Connect yoke callbacks
-        self.yoke.on_spawn_jet = self.spawn_fighter_jet_airborne
-        self.yoke.on_spawn_drone = self.spawn_drone_mountain
-        self.yoke.on_spawn_cargo = self.spawn_cargo_drop
-        self.yoke.on_spawn_rocket = self.spawn_rocket_launch
-        self.yoke.on_spawn_cannon = self.spawn_cannon_projectile
-        self.yoke.on_spawn_glider = self.spawn_airfoil_glider
-        self.yoke.on_spawn_satellite = self.spawn_orbital_satellite
-        self.yoke.on_spawn_sphere = self.spawn_bouncing_spheres
-        self.yoke.on_cycle_cam = self._cycle_camera_mode
-        self.yoke.on_trigger_breakup = self._trigger_manual_breakup
-        self.yoke.on_toggle_units = self.hud.toggle_unit_system
-        self.yoke.on_toggle_help = self.hud.toggle_help_guide
-        self.yoke.on_reset_world = self._reset_simulation_world
+        # 10. Interactive In-Viewport 3D Control Panel
+        self.control_panel = InViewportControlPanel3D(
+            base_app=self,
+            on_change_scenario=self.switch_scenario,
+            on_tweak_mass=self.tweak_mass,
+            on_tweak_cd=self.tweak_cd,
+            on_tweak_thrust=self.tweak_thrust,
+            on_tweak_angle=self.tweak_angle,
+            on_launch_reset=self.launch_or_reset,
+            on_toggle_pause=self.toggle_pause,
+            on_step_physics=self.step_physics,
+            on_change_cam_mode=self.set_camera_mode,
+            on_toggle_axes=self.toggle_axes,
+            on_toggle_grid=self.toggle_grid,
+            on_toggle_trail=self.toggle_trail,
+        )
+
+        # Bind parameter keyboard hotkeys
+        self._bind_parameter_hotkeys()
 
         # Start Physics Engine Thread
         self.physics_thread.start()
 
-        # Spawn Active Scenario Preset
+        # Spawn Initial Active Scenario Preset
         self._spawn_preset_scenario(self.scenario_idx)
 
         # Register Main Render Frame Task
@@ -149,47 +171,155 @@ class PyAero3DSimulatorApp(ShowBase):
         alnp = self.render.attachNewNode(alight)
         self.render.setLight(alnp)
 
+    def _bind_parameter_hotkeys(self) -> None:
+        """Binds instant keyboard shortcuts for in-game physical parameter tuning."""
+        self.accept("[", lambda: self.tweak_mass(-0.20))
+        self.accept("]", lambda: self.tweak_mass(0.20))
+        self.accept("-", lambda: self.tweak_cd(-0.05))
+        self.accept("=", lambda: self.tweak_cd(0.05))
+        self.accept(";", lambda: self.tweak_thrust(-5000.0))
+        self.accept("'", lambda: self.tweak_thrust(5000.0))
+        self.accept(",", lambda: self.tweak_angle(-5.0))
+        self.accept(".", lambda: self.tweak_angle(5.0))
+        self.accept("r", self.launch_or_reset)
+        self.accept("p", self.toggle_pause)
+        self.accept("o", self._cycle_camera_mode)
+        self.accept("tab", self.control_panel.toggle_panel_visibility)
+        self.accept("f", lambda: self.cam_controller.focus_target(self._get_target_pos()))
+
+    def _get_target_pos(self) -> np.ndarray:
+        if 0 <= self.current_controlled_idx < self.state_buffer.max_entities:
+            if self.state_buffer.data[self.current_controlled_idx, StateIdx.ACTIVE] > 0.5:
+                return self.state_buffer.data[self.current_controlled_idx, StateIdx.PX:StateIdx.PZ + 1]
+        return np.array([0.0, 10.0, -1000.0])
+
+    def tweak_mass(self, delta_pct: float) -> None:
+        self.curr_mass = max(0.1, self.curr_mass * (1.0 + delta_pct))
+        if 0 <= self.current_controlled_idx < self.state_buffer.max_entities:
+            self.state_buffer.data[self.current_controlled_idx, StateIdx.MASS] = self.curr_mass
+        self._update_panel_readouts()
+
+    def tweak_cd(self, delta: float) -> None:
+        self.curr_cd = max(0.005, min(2.5, self.curr_cd + delta))
+        if 0 <= self.current_controlled_idx < self.state_buffer.max_entities:
+            self.state_buffer.data[self.current_controlled_idx, StateIdx.CD] = self.curr_cd
+        self._update_panel_readouts()
+
+    def tweak_thrust(self, delta: float) -> None:
+        self.curr_thrust = max(0.0, self.curr_thrust + delta)
+        self._update_panel_readouts()
+
+    def tweak_angle(self, delta_deg: float) -> None:
+        self.curr_theta = np.clip(self.curr_theta + delta_deg, 0.0, 90.0)
+        self._update_panel_readouts()
+
+    def _update_panel_readouts(self) -> None:
+        self.control_panel.update_parameter_readouts(self.curr_mass, self.curr_cd, self.curr_thrust, self.curr_theta)
+
+    def switch_scenario(self, scenario_idx: int) -> None:
+        self.scenario_idx = scenario_idx
+        self.launch_or_reset()
+
+    def launch_or_reset(self) -> None:
+        print(f"[PyAero3D] Re-launching Scenario Preset #{self.scenario_idx}...")
+        self.trajectory_ribbon.clear()
+        for node in self.actor_nodes.values():
+            node.removeNode()
+        self.actor_nodes.clear()
+        self.state_buffer.clear()
+        self._spawn_preset_scenario(self.scenario_idx)
+        self._update_panel_readouts()
+
+    def toggle_pause(self) -> None:
+        self.is_paused = not self.is_paused
+        if self.is_paused:
+            self.physics_thread.stop()
+            print("[PyAero3D] Physics Paused.")
+        else:
+            self.physics_thread.start()
+            print("[PyAero3D] Physics Resumed.")
+
+    def step_physics(self) -> None:
+        if self.is_paused:
+            self.physics_thread.engine.step(0.01)
+
+    def set_camera_mode(self, mode_int: int) -> None:
+        self.cam_controller.set_mode(CameraMode(mode_int))
+        print(f"[PyAero3D] Camera Mode set to: {CameraMode(mode_int).name}")
+
+    def _cycle_camera_mode(self) -> None:
+        new_mode = self.cam_controller.cycle_mode()
+        print(f"[PyAero3D] Camera Mode cycled to: {new_mode.name}")
+
+    def toggle_axes(self) -> None:
+        if self.axes_np.isHidden(): self.axes_np.show()
+        else: self.axes_np.hide()
+
+    def toggle_grid(self) -> None:
+        if self.grid_np.isHidden(): self.grid_np.show()
+        else: self.grid_np.hide()
+
+    def toggle_trail(self) -> None:
+        if self.trajectory_ribbon.trail_np and not self.trajectory_ribbon.trail_np.isHidden():
+            self.trajectory_ribbon.trail_np.hide()
+        elif self.trajectory_ribbon.trail_np:
+            self.trajectory_ribbon.trail_np.show()
+
     def _spawn_preset_scenario(self, idx: int) -> int:
         """Spawns the exact 3D physical counterpart of the selected Graph Studio preset."""
+        scenario_names = [
+            "0: Ballistics Cannon Shell",
+            "1: 6-DOF Fighter Jet",
+            "2: NACA Aerodynamic Glider",
+            "3: Multi-Stage Space Rocket",
+            "4: Keplerian Orbital Satellite",
+            "5: Chaotic Double Pendulum",
+            "6: Lorentz Particle Cyclotron",
+            "7: Viscoelastic Bouncing Spheres",
+        ]
+        scen_name = scenario_names[idx] if idx < len(scenario_names) else f"Preset #{idx}"
+        self.hud.txt_scenario_header.setText(f"ACTIVE 3D PRESET: {scen_name.upper()}")
+
         if idx == 0:  # Ballistics Cannon Projectile
+            self.curr_mass = 15.0; self.curr_cd = 0.30; self.curr_theta = 45.0
             return self.spawn_cannon_projectile()
         elif idx == 1:  # Fighter Jet 6-DOF
+            self.curr_mass = 12000.0; self.curr_cd = 0.024; self.curr_thrust = 85000.0; self.curr_theta = 5.0
             return self.spawn_fighter_jet_airborne()
         elif idx == 2:  # NACA Airfoil Glider
+            self.curr_mass = 650.0; self.curr_cd = 0.018; self.curr_theta = 3.0
             return self.spawn_airfoil_glider()
         elif idx == 3:  # Multi-Stage Rocket Launch
+            self.curr_mass = 8500.0; self.curr_cd = 0.20; self.curr_thrust = 140000.0; self.curr_theta = 88.0
             return self.spawn_rocket_launch()
         elif idx == 4:  # Orbital Satellite
+            self.curr_mass = 2400.0; self.curr_cd = 0.01; self.curr_thrust = 5000.0
             return self.spawn_orbital_satellite()
         elif idx == 5:  # Double Pendulum
+            self.curr_mass = 10.0; self.curr_cd = 0.05
             return self.spawn_double_pendulum()
         elif idx == 6:  # Lorentz Particle Cyclotron
+            self.curr_mass = 1.0; self.curr_cd = 0.0
             return self.spawn_cyclotron_particle()
         elif idx == 7:  # Bouncing Viscoelastic Spheres
+            self.curr_mass = 25.0; self.curr_cd = 0.45
             return self.spawn_bouncing_spheres()
         else:
             return self.spawn_fighter_jet_airborne()
 
     def spawn_fighter_jet_airborne(self) -> int:
-        """Spawns Fighter Jet in mid-air with high forward airspeed and responsive throttle."""
-        v0 = self.param_v0 if self.param_v0 is not None else 220.0
-        theta_deg = self.param_theta if self.param_theta is not None else 5.0
-        mass = self.param_mass if self.param_mass is not None else 12000.0
-        cd = self.param_cd if self.param_cd is not None else 0.024
-        area = self.param_area if self.param_area is not None else 28.0
-
-        theta_rad = np.radians(theta_deg)
+        theta_rad = np.radians(self.curr_theta)
         init_pos = np.array([0.0, 1200.0, -500.0], dtype=np.float64)
-        init_vel = np.array([0.0, v0 * np.sin(theta_rad), v0 * np.cos(theta_rad)], dtype=np.float64)
+        init_vel = np.array([0.0, self.curr_v0 * np.sin(theta_rad), self.curr_v0 * np.cos(theta_rad)], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
             entity_type=EntityType.FIXED_WING_JET,
-            mass=mass,
+            mass=self.curr_mass,
             position=init_pos,
             velocity=init_vel,
             radius=8.5,
-            cd=cd,
-            area=area,
+            cd=self.curr_cd,
+            area=self.curr_area,
         )
         self.state_buffer.data[idx, StateIdx.THROTTLE] = 0.85
 
@@ -198,29 +328,24 @@ class PyAero3DSimulatorApp(ShowBase):
         self.actor_nodes[idx] = actor_np
         self.current_controlled_idx = idx
         self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Spawned 6-DOF Fighter Jet (Entity #{idx}) at 1,200m altitude ({v0*3.6:.0f} km/h, 85% Throttle).")
+        self.cam_controller.set_target_scale(8.5)
+        self.cam_controller.focus_target(init_pos)
+        print(f"[PyAero3D] Spawned 6-DOF Fighter Jet (Entity #{idx}).")
         return idx
 
     def spawn_cannon_projectile(self) -> int:
-        """Spawns 3D artillery cannon shell with exact launch angle and velocity from graph."""
-        v0 = self.param_v0 if self.param_v0 is not None else 320.0
-        theta_deg = self.param_theta if self.param_theta is not None else 45.0
-        mass = self.param_mass if self.param_mass is not None else 15.0
-        cd = self.param_cd if self.param_cd is not None else 0.30
-        area = self.param_area if self.param_area is not None else 0.08
-
-        theta_rad = np.radians(theta_deg)
+        theta_rad = np.radians(self.curr_theta)
         init_pos = np.array([0.0, 5.0, -1200.0], dtype=np.float64)
-        init_vel = np.array([0.0, v0 * np.sin(theta_rad), v0 * np.cos(theta_rad)], dtype=np.float64)
+        init_vel = np.array([0.0, self.curr_v0 * np.sin(theta_rad), self.curr_v0 * np.cos(theta_rad)], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
             entity_type=EntityType.CANNON_PROJECTILE,
-            mass=mass,
+            mass=self.curr_mass,
             position=init_pos,
             velocity=init_vel,
             radius=1.2,
-            cd=cd,
-            area=area,
+            cd=self.curr_cd,
+            area=0.08,
         )
 
         actor_np = VehicleModelBuilder.create_cannon_projectile()
@@ -228,27 +353,23 @@ class PyAero3DSimulatorApp(ShowBase):
         self.actor_nodes[idx] = actor_np
         self.current_controlled_idx = idx
         self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Fired Ballistic Artillery Shell (Entity #{idx}) at {theta_deg:.1f}° pitch, v0={v0:.0f} m/s.")
+        self.cam_controller.set_target_scale(2.0)
+        self.cam_controller.focus_target(init_pos)
+        print(f"[PyAero3D] Fired Ballistic Artillery Shell (Entity #{idx}).")
         return idx
 
     def spawn_airfoil_glider(self) -> int:
-        """Spawns NACA Glider Wing vehicle gliding over mountain valley."""
-        v0 = self.param_v0 if self.param_v0 is not None else 95.0
-        mass = self.param_mass if self.param_mass is not None else 650.0
-        cd = self.param_cd if self.param_cd is not None else 0.018
-        area = self.param_area if self.param_area is not None else 16.0
-
         init_pos = np.array([0.0, 1600.0, -200.0], dtype=np.float64)
-        init_vel = np.array([0.0, -1.5, v0], dtype=np.float64)
+        init_vel = np.array([0.0, -1.5, self.curr_v0], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
             entity_type=EntityType.AIRFOIL_GLIDER,
-            mass=mass,
+            mass=self.curr_mass,
             position=init_pos,
             velocity=init_vel,
             radius=7.5,
-            cd=cd,
-            area=area,
+            cd=self.curr_cd,
+            area=16.0,
         )
 
         actor_np = VehicleModelBuilder.create_airfoil_wing()
@@ -256,26 +377,23 @@ class PyAero3DSimulatorApp(ShowBase):
         self.actor_nodes[idx] = actor_np
         self.current_controlled_idx = idx
         self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Spawned NACA Aerodynamic Glider (Entity #{idx}) at 1,600m altitude.")
+        self.cam_controller.set_target_scale(7.5)
+        self.cam_controller.focus_target(init_pos)
+        print(f"[PyAero3D] Spawned NACA Aerodynamic Glider (Entity #{idx}).")
         return idx
 
     def spawn_rocket_launch(self) -> int:
-        """Spawns 3D multi-stage rocket on launch pad with full vertical throttle."""
-        mass = self.param_mass if self.param_mass is not None else 8500.0
-        cd = self.param_cd if self.param_cd is not None else 0.20
-        area = self.param_area if self.param_area is not None else 4.5
-
         init_pos = np.array([300.0, 5.0, -1200.0], dtype=np.float64)
         init_vel = np.array([0.0, 5.0, 0.0], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
             entity_type=EntityType.MULTI_STAGE_ROCKET,
-            mass=mass,
+            mass=self.curr_mass,
             position=init_pos,
             velocity=init_vel,
-            radius=1.8,
-            cd=cd,
-            area=area,
+            radius=2.5,
+            cd=self.curr_cd,
+            area=4.5,
         )
         self.state_buffer.data[idx, StateIdx.THROTTLE] = 1.0
 
@@ -284,21 +402,22 @@ class PyAero3DSimulatorApp(ShowBase):
         self.actor_nodes[idx] = actor_np
         self.current_controlled_idx = idx
         self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Initiated Multi-Stage Rocket Liftoff (Entity #{idx}) from Launch Pad.")
+        self.cam_controller.set_target_scale(8.0)
+        self.cam_controller.focus_target(init_pos)
+        print(f"[PyAero3D] Initiated Multi-Stage Rocket Liftoff (Entity #{idx}).")
         return idx
 
     def spawn_orbital_satellite(self) -> int:
-        """Spawns 3D satellite in space orbit with solar panels."""
         init_pos = np.array([0.0, 3500.0, 0.0], dtype=np.float64)
         init_vel = np.array([0.0, 0.0, 180.0], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
             entity_type=EntityType.ORBITAL_SATELLITE,
-            mass=2400.0,
+            mass=self.curr_mass,
             position=init_pos,
             velocity=init_vel,
             radius=3.5,
-            cd=0.01,
+            cd=self.curr_cd,
             area=8.0,
         )
 
@@ -307,21 +426,27 @@ class PyAero3DSimulatorApp(ShowBase):
         self.actor_nodes[idx] = actor_np
         self.current_controlled_idx = idx
         self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Spawned Orbital Satellite (Entity #{idx}) in Orbit at 3,500m.")
+        self.cam_controller.set_target_scale(5.0)
+        self.cam_controller.focus_target(init_pos)
+        print(f"[PyAero3D] Spawned Orbital Satellite (Entity #{idx}).")
         return idx
 
     def spawn_double_pendulum(self) -> int:
-        """Spawns 3D articulated double pendulum swinging in alpine clearing."""
         init_pos = np.array([0.0, 20.0, -900.0], dtype=np.float64)
         init_vel = np.array([5.0, 0.0, 0.0], dtype=np.float64)
 
+        # Attach mounting frame stand
+        stand_np = SpatialReferenceBuilder.create_pendulum_stand()
+        stand_np.reparentTo(self.render)
+        stand_np.setPos(0.0, -900.0, 0.0)
+
         idx = self.state_buffer.allocate_entity(
             entity_type=EntityType.DOUBLE_PENDULUM,
-            mass=10.0,
+            mass=self.curr_mass,
             position=init_pos,
             velocity=init_vel,
-            radius=4.0,
-            cd=0.10,
+            radius=3.0,
+            cd=self.curr_cd,
             area=1.0,
         )
 
@@ -330,17 +455,18 @@ class PyAero3DSimulatorApp(ShowBase):
         self.actor_nodes[idx] = actor_np
         self.current_controlled_idx = idx
         self.yoke.set_target_entity(idx)
+        self.cam_controller.set_target_scale(4.0)
+        self.cam_controller.focus_target(init_pos)
         print(f"[PyAero3D] Spawned 3D Articulated Double Pendulum (Entity #{idx}).")
         return idx
 
     def spawn_cyclotron_particle(self) -> int:
-        """Spawns 3D particle cyclotron chamber with magnetic gyromotion."""
         init_pos = np.array([0.0, 30.0, -800.0], dtype=np.float64)
         init_vel = np.array([50.0, 20.0, 0.0], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
             entity_type=EntityType.LORENTZ_PARTICLE,
-            mass=1.0,
+            mass=self.curr_mass,
             position=init_pos,
             velocity=init_vel,
             radius=2.5,
@@ -353,21 +479,22 @@ class PyAero3DSimulatorApp(ShowBase):
         self.actor_nodes[idx] = actor_np
         self.current_controlled_idx = idx
         self.yoke.set_target_entity(idx)
+        self.cam_controller.set_target_scale(3.5)
+        self.cam_controller.focus_target(init_pos)
         print(f"[PyAero3D] Spawned 3D Lorentz Particle Cyclotron (Entity #{idx}).")
         return idx
 
     def spawn_bouncing_spheres(self) -> int:
-        """Spawns bouncing viscoelastic physical spheres down mountain slope."""
         init_pos = np.array([0.0, 850.0, -200.0], dtype=np.float64)
         init_vel = np.array([15.0, 5.0, 40.0], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
             entity_type=EntityType.BOUNCING_SPHERE,
-            mass=25.0,
+            mass=self.curr_mass,
             position=init_pos,
             velocity=init_vel,
             radius=1.5,
-            cd=0.45,
+            cd=self.curr_cd,
             area=1.8,
         )
 
@@ -376,73 +503,10 @@ class PyAero3DSimulatorApp(ShowBase):
         self.actor_nodes[idx] = actor_np
         self.current_controlled_idx = idx
         self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Spawned Viscoelastic Bouncing Sphere (Entity #{idx}) on Mountain Slope.")
+        self.cam_controller.set_target_scale(3.0)
+        self.cam_controller.focus_target(init_pos)
+        print(f"[PyAero3D] Spawned Viscoelastic Bouncing Sphere (Entity #{idx}).")
         return idx
-
-    def spawn_drone_mountain(self) -> int:
-        """Spawns 6-DOF quadrotor drone hovering over mountain ridge."""
-        init_pos = np.array([1500.0, 950.0, 1200.0], dtype=np.float64)
-        init_vel = np.array([0.0, 0.0, 0.0], dtype=np.float64)
-        idx = self.state_buffer.allocate_entity(
-            entity_type=EntityType.QUADROTOR_DRONE,
-            mass=4.5,
-            position=init_pos,
-            velocity=init_vel,
-            radius=0.6,
-            cd=1.1,
-            area=0.25,
-        )
-        self.state_buffer.data[idx, StateIdx.THROTTLE] = 0.55
-
-        actor_np = VehicleModelBuilder.create_quadrotor_drone()
-        actor_np.reparentTo(self.render)
-        self.actor_nodes[idx] = actor_np
-        self.current_controlled_idx = idx
-        self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Spawned Quadrotor Drone (Entity #{idx}) hovering over Mountain Ridge.")
-        return idx
-
-    def spawn_cargo_drop(self) -> int:
-        """Spawns cargo parachute drop at high altitude."""
-        init_pos = np.array([0.0, 2200.0, 500.0], dtype=np.float64)
-        init_vel = np.array([0.0, 0.0, 80.0], dtype=np.float64)
-        idx = self.state_buffer.allocate_entity(
-            entity_type=EntityType.CARGO_PARACHUTE,
-            mass=1200.0,
-            position=init_pos,
-            velocity=init_vel,
-            radius=2.5,
-            cd=1.45,
-            area=45.0,
-        )
-
-        actor_np = VehicleModelBuilder.create_cargo_parachute()
-        actor_np.reparentTo(self.render)
-        self.actor_nodes[idx] = actor_np
-        self.current_controlled_idx = idx
-        self.yoke.set_target_entity(idx)
-        print(f"[PyAero3D] Spawned High-Altitude Cargo Parachute Drop (Entity #{idx}).")
-        return idx
-
-    def _cycle_camera_mode(self) -> None:
-        new_mode = self.cam_controller.cycle_mode()
-        print(f"[PyAero3D] Camera Mode switched to: {new_mode.name}")
-
-    def _trigger_manual_breakup(self) -> None:
-        if self.current_controlled_idx in self.actor_nodes:
-            print(f"[PyAero3D] Triggering Kinetic Breakup on Entity #{self.current_controlled_idx}...")
-            FragmentationEngine.explode_entity(self.state_buffer, self.current_controlled_idx, num_shards=16)
-            old_np = self.actor_nodes.pop(self.current_controlled_idx, None)
-            if old_np:
-                old_np.removeNode()
-
-    def _reset_simulation_world(self) -> None:
-        print("[PyAero3D] Resetting simulation world...")
-        for node in self.actor_nodes.values():
-            node.removeNode()
-        self.actor_nodes.clear()
-        self.state_buffer.clear()
-        self._spawn_preset_scenario(self.scenario_idx)
 
     def _render_frame_update(self, task):
         dt = globalClock.getDt()
@@ -496,6 +560,10 @@ class PyAero3DSimulatorApp(ShowBase):
                 node.setPos(pos[0], pos[2], pos[1])
                 node.setQuat(LQuaternionf(quat[0], quat[1], quat[3], quat[2]))
 
+                # Add to dynamic 3D trajectory ribbon if primary controlled target
+                if idx == self.current_controlled_idx:
+                    self.trajectory_ribbon.add_point(pos)
+
         # Update Camera Controller
         target_row = snapshot[self.current_controlled_idx] if self.current_controlled_idx in active_indices else None
         if target_row is not None:
@@ -503,6 +571,8 @@ class PyAero3DSimulatorApp(ShowBase):
             t_quat = target_row[StateIdx.QW:StateIdx.QZ + 1]
             t_vel = target_row[StateIdx.VX:StateIdx.VZ + 1]
             self.cam_controller.update(t_pos, t_quat, t_vel, dt)
+        else:
+            self.cam_controller.update(np.zeros(3), np.array([1, 0, 0, 0]), np.zeros(3), dt)
 
         # Update HUD Telemetry
         ground_h = 0.0

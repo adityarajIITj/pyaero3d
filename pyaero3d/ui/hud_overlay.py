@@ -37,11 +37,32 @@ class FlightHUDOverlay:
 
         # 2. Interactive Navigation / Top Menu Bar
         self.txt_nav_bar = OnscreenText(
-            text="[FILE: F1 Reset | F2 Save]   [UNITS: U (Imperial)]   [HELP: H]   [SPAWN: 1 Jet | 2 Drone | 3 Cargo | 4 Rocket]   [CAM: Tab]",
-            pos=(-0.95, 0.87),
-            scale=0.030,
+            text="[SPAWN: 1 Jet | 2 Drone | 3 Cargo | 4 Rocket | 5 Artillery | 6 Glider | 7 Satellite | 8 Sphere]  [CAM: Tab / Right-Click Orbit]",
+            pos=(-0.95, 0.88),
+            scale=0.028,
             fg=(0.55, 0.85, 1.0, 0.95),
             shadow=(0.0, 0.0, 0.0, 0.8),
+            align=TextNode.ALeft,
+            mayChange=True,
+        )
+
+        # 2b. Live Scenario Header & Parameter Knobs Bar
+        self.txt_scenario_header = OnscreenText(
+            text="ACTIVE 3D PRESET: [SCENARIO]",
+            pos=(-0.95, 0.83),
+            scale=0.032,
+            fg=(1.00, 0.85, 0.20, 1.0),
+            shadow=(0.0, 0.0, 0.0, 0.9),
+            align=TextNode.ALeft,
+            mayChange=True,
+        )
+
+        self.txt_param_bar = OnscreenText(
+            text="[ [ / ] ] Mass (m) | [ - / = ] Drag (Cd) | [ ; / ' ] Thrust (T) | [ , / . ] Pitch Angle",
+            pos=(-0.95, 0.78),
+            scale=0.026,
+            fg=(0.85, 0.90, 0.95, 0.9),
+            shadow=(0.0, 0.0, 0.0, 0.9),
             align=TextNode.ALeft,
             mayChange=True,
         )
