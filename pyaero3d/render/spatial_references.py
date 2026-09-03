@@ -60,6 +60,64 @@ class SpatialReferenceBuilder:
         return NodePath(node)
 
     @staticmethod
+    def create_flat_canvas(size: float = 25000.0, color: Tuple[float, float, float, float] = (0.16, 0.17, 0.20, 1.0)) -> NodePath:
+        """Creates a smooth flat grey floor canvas for clean CAD/laboratory world."""
+        from panda3d.core import CardMaker
+        cm = CardMaker("FlatCanvasFloor")
+        cm.setFrame(-size * 0.5, size * 0.5, -size * 0.5, size * 0.5)
+        np_card = NodePath(cm.generate())
+        np_card.setP(-90)
+        np_card.setPos(0.0, 0.0, 0.0)
+        np_card.setColor(Vec4(*color))
+        return np_card
+
+    @staticmethod
+    def create_cad_grid(size: float = 6000.0, major_step: float = 100.0, minor_step: float = 20.0, elevation: float = 0.02) -> NodePath:
+        """Creates a crisp dual-tone CAD metric grid (minor + major accent lines)."""
+        vdata = GeomVertexData("CadGrid", GeomVertexFormat.getV3c4(), Geom.UHDynamic)
+        v_writer = GeomVertexWriter(vdata, "vertex")
+        c_writer = GeomVertexWriter(vdata, "color")
+        lines = GeomLines(Geom.UHDynamic)
+
+        minor_col = (0.24, 0.26, 0.30, 0.6)
+        major_col = (0.35, 0.40, 0.48, 0.9)
+        axis_x_col = (0.85, 0.25, 0.25, 1.0)
+        axis_z_col = (0.25, 0.45, 0.95, 1.0)
+
+        half = size * 0.5
+        ticks = np.arange(-half, half + 1e-4, minor_step)
+        v_idx = 0
+
+        for t in ticks:
+            is_major = abs(t % major_step) < 1e-3 or abs(t % major_step - major_step) < 1e-3
+            is_center = abs(t) < 1e-3
+
+            col_x = axis_x_col if is_center else (major_col if is_major else minor_col)
+            col_z = axis_z_col if is_center else (major_col if is_major else minor_col)
+
+            # Line parallel to Y (depth)
+            v_writer.addData3(t, -half, elevation)
+            c_writer.addData4(*col_x)
+            v_writer.addData3(t, half, elevation)
+            c_writer.addData4(*col_x)
+            lines.addVertices(v_idx, v_idx + 1)
+            v_idx += 2
+
+            # Line parallel to X
+            v_writer.addData3(-half, t, elevation)
+            c_writer.addData4(*col_z)
+            v_writer.addData3(half, t, elevation)
+            c_writer.addData4(*col_z)
+            lines.addVertices(v_idx, v_idx + 1)
+            v_idx += 2
+
+        geom = Geom(vdata)
+        geom.addPrimitive(lines)
+        node = GeomNode("CadGridNode")
+        node.addGeom(geom)
+        return NodePath(node)
+
+    @staticmethod
     def create_ground_grid(size: float = 200.0, step: float = 10.0, elevation: float = 0.5) -> NodePath:
         """
         Creates a high-visibility 3D ground reference grid for distance and scale estimation.

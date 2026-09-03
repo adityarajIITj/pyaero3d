@@ -21,16 +21,19 @@ class MountainTerrainGenerator:
         world_size_m: float = 12000.0,   # 12km x 12km continuous world
         max_height_m: float = 2400.0,    # 2.4km alpine summit peaks
         seed: int = 42,
+        is_flat: bool = False,
     ):
         self.grid_res = grid_resolution
         self.world_size = world_size_m
-        self.max_height = max_height_m
+        self.max_height = 0.0 if is_flat else max_height_m
         self.seed = seed
+        self.is_flat = is_flat
         self.dx = world_size_m / (grid_resolution - 1)
 
         # Precompute height matrix (grid_res x grid_res)
         self.height_matrix = np.zeros((grid_resolution, grid_resolution), dtype=np.float32)
-        self._generate_fbm_terrain()
+        if not is_flat:
+            self._generate_fbm_terrain()
 
     def _generate_fbm_terrain(self) -> None:
         """
@@ -81,11 +84,14 @@ class MountainTerrainGenerator:
                 img.setGray(x, y, val)
         return img
 
-    def build_shader_terrain(self, render_node, camera_node):
+    def build_shader_terrain(self, render_node: NodePath, camera_node: NodePath) -> NodePath:
         """
-        Constructs and attaches Panda3D ShaderTerrainMesh with GPU continuous LOD.
+        Instantiates Panda3D ShaderTerrainMesh with dynamic GPU tessellation.
         """
-        from panda3d.core import ShaderTerrainMesh, Texture, SamplerState, NodePath, Shader, Filename
+        if self.is_flat:
+            return NodePath("FlatTerrainStub")
+
+        from panda3d.core import ShaderTerrainMesh, Texture, SamplerState, Shader, Filename
         import os
 
         pnm = self.create_pnm_image()
@@ -122,7 +128,7 @@ class MountainTerrainGenerator:
         """
         Bilinear interpolation continuous height query h(x, z) in meters.
         """
-        if np.isnan(world_x) or np.isnan(world_z) or np.isinf(world_x) or np.isinf(world_z):
+        if self.is_flat or np.isnan(world_x) or np.isnan(world_z) or np.isinf(world_x) or np.isinf(world_z):
             return 0.0
 
         half_world = self.world_size * 0.5
@@ -155,6 +161,9 @@ class MountainTerrainGenerator:
         """
         Vectorized bilinear height query for N entities simultaneously.
         """
+        if self.is_flat:
+            return np.zeros_like(world_xs, dtype=np.float32)
+
         half_world = self.world_size * 0.5
         inv_dx = 1.0 / self.dx
         gxs = (world_xs + half_world) * inv_dx
@@ -182,6 +191,9 @@ class MountainTerrainGenerator:
         """
         Computes analytical surface normal vector n(x, z) for physics slope reaction forces.
         """
+        if self.is_flat:
+            return np.array([0.0, 1.0, 0.0])
+
         h_left = self.get_height(world_x - delta, world_z)
         h_right = self.get_height(world_x + delta, world_z)
         h_back = self.get_height(world_x, world_z - delta)

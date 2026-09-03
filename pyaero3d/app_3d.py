@@ -84,50 +84,47 @@ class PyAero3DSimulatorApp(ShowBase):
 
         self.is_paused = False
 
-        self.setBackgroundColor(0.58, 0.74, 0.94, 1.0)
+        # Clean Flat Grey Studio Canvas World
+        self.setBackgroundColor(0.12, 0.13, 0.16, 1.0)
 
         # Configure Camera Lens FOV
         self.camLens.setFov(75)
-        self.camLens.setNearFar(0.5, 50000.0)
+        self.camLens.setNearFar(0.5, 40000.0)
 
-        # Atmospheric Depth Haze Fog
-        self.fog = Fog("AtmosphericDepthHaze")
-        self.fog.setColor(0.58, 0.74, 0.94)
-        self.fog.setLinearRange(250.0, 18000.0)
+        # Subtle Studio Depth Cue
+        self.fog = Fog("StudioDepthCue")
+        self.fog.setColor(0.12, 0.13, 0.16)
+        self.fog.setLinearRange(2500.0, 25000.0)
         self.render.setFog(self.fog)
 
         # 1. State Buffer Tensor
         self.state_buffer = StateBuffer(max_entities=256)
 
-        # 2. Procedural Mountain Terrain & Sky Dome
-        print("[PyAero3D] Generating Alpine Mountain Terrain...")
-        self.terrain_gen = MountainTerrainGenerator(world_size_m=12000.0, max_height_m=2400.0, grid_resolution=512)
-        self.terrain_node = self.terrain_gen.build_shader_terrain(self.render, self.camera)
+        # 2. Continuous Flat Physics World
+        print("[PyAero3D] Initializing Flat Grey Canvas World...")
+        self.terrain_gen = MountainTerrainGenerator(world_size_m=25000.0, is_flat=True)
 
-        self.sky_dome = EnvironmentGeometryBuilder.create_sky_dome(radius=40000.0)
-        self.sky_dome.reparentTo(self.render)
-        self.runway = EnvironmentGeometryBuilder.create_runway_strip(elevation=1.0)
-        self.runway.reparentTo(self.render)
+        # Flat Grey Floor Canvas
+        self.floor_canvas = SpatialReferenceBuilder.create_flat_canvas(size=30000.0, color=(0.17, 0.18, 0.21, 1.0))
+        self.floor_canvas.reparentTo(self.render)
+        self.floor_canvas.setPos(0.0, 0.0, 0.0)
 
-        # Living Airfield Infrastructure & Scenery
-        self.world_scenery: List[NodePath] = []
-        self._spawn_living_world_scenery()
-
-        # 3. 3D Spatial Reference Gizmos (XYZ Axes, Ground Grid, Trajectory Ribbon)
-        self.axes_np = SpatialReferenceBuilder.create_coordinate_axes(length=25.0)
-        self.axes_np.reparentTo(self.render)
-        self.axes_np.setPos(0.0, -1000.0, 2.0)
-
-        self.grid_np = SpatialReferenceBuilder.create_ground_grid(size=300.0, step=15.0, elevation=1.5)
+        # 3. Clean Infinite CAD Metric Grid (Dual-tone major/minor grid lines)
+        self.grid_np = SpatialReferenceBuilder.create_cad_grid(size=8000.0, major_step=100.0, minor_step=20.0, elevation=0.02)
         self.grid_np.reparentTo(self.render)
-        self.grid_np.setPos(0.0, -1000.0, 0.0)
+        self.grid_np.setPos(0.0, 0.0, 0.0)
 
-        self.trajectory_ribbon = Dynamic3DTrajectoryRibbon(self.render, max_points=600, color=(0.15, 0.85, 1.0, 0.95))
+        # Origin Cartesian Coordinate Axes (Red=X, Green=Y Up, Blue=Z Forward)
+        self.axes_np = SpatialReferenceBuilder.create_coordinate_axes(length=18.0)
+        self.axes_np.reparentTo(self.render)
+        self.axes_np.setPos(0.0, 0.0, 0.04)
 
-        # 4. Sunlight & Ambient Lighting
+        self.trajectory_ribbon = Dynamic3DTrajectoryRibbon(self.render, max_points=700, color=(0.15, 0.85, 1.0, 0.95))
+
+        # 4. High-Contrast Studio Lighting
         self._setup_lighting()
 
-        # 5. Collision & Fragmentation Engines
+        # 5. Collision & Fragmentation Engines (Flat World Ground Response)
         self.collision_engine = MountainCollisionEngine(self.terrain_gen)
         self.fragmentation_engine = FragmentationEngine
 
@@ -154,6 +151,7 @@ class PyAero3DSimulatorApp(ShowBase):
         self.pendulum_solver = ChaoticDoublePendulumSolver(l1=3.5, l2=3.5, m1=self.curr_mass, m2=self.curr_mass)
         self.pendulum_state = np.array([np.radians(60.0), 0.0, np.radians(90.0), 0.0], dtype=np.float64)
         self.pendulum_nodes: Dict[str, NodePath] = {}
+        self.pendulum_pivot_p3 = Point3(0.0, 0.0, 16.0)
 
         # Spring Oscillator state
         self.spring_y = 0.0
@@ -195,50 +193,26 @@ class PyAero3DSimulatorApp(ShowBase):
         self.taskMgr.add(self._render_frame_update, "PyAero3D_RenderUpdate")
 
     def _setup_lighting(self) -> None:
-        """Sets up realistic sunlight and ambient lighting."""
-        dlight = DirectionalLight("sunlight")
-        dlight.setColor((1.0, 0.96, 0.90, 1.0))
+        """Sets up high-contrast 3-point studio lighting for clean CAD visualization."""
+        # Key Light (Upper front-left)
+        dlight = DirectionalLight("KeyLight")
+        dlight.setColor((0.95, 0.95, 0.98, 1.0))
         dlnp = self.render.attachNewNode(dlight)
-        dlnp.setHpr(-45, -60, 0)
+        dlnp.setHpr(-45, -55, 0)
         self.render.setLight(dlnp)
 
-        alight = AmbientLight("ambient")
-        alight.setColor((0.45, 0.48, 0.55, 1.0))
+        # Fill Light (Soft right)
+        fill = DirectionalLight("FillLight")
+        fill.setColor((0.35, 0.40, 0.50, 1.0))
+        fillnp = self.render.attachNewNode(fill)
+        fillnp.setHpr(135, -35, 0)
+        self.render.setLight(fillnp)
+
+        # Ambient Studio Light
+        alight = AmbientLight("AmbientStudio")
+        alight.setColor((0.32, 0.34, 0.38, 1.0))
         alnp = self.render.attachNewNode(alight)
         self.render.setLight(alnp)
-
-    def _spawn_living_world_scenery(self) -> None:
-        """Spawns Airfield ATC Tower, Hangars, and Valley Pine Trees."""
-        # ATC Tower on east airfield apron
-        tower = EnvironmentGeometryBuilder.create_atc_tower()
-        tower.reparentTo(self.render)
-        tower.setPos(75.0, -100.0, 1.0)
-        self.world_scenery.append(tower)
-
-        # Hangars on west apron
-        hangar1 = EnvironmentGeometryBuilder.create_hangar(width=55.0, length=70.0, height=22.0)
-        hangar1.reparentTo(self.render)
-        hangar1.setPos(-80.0, -120.0, 1.0)
-        self.world_scenery.append(hangar1)
-
-        hangar2 = EnvironmentGeometryBuilder.create_hangar(width=55.0, length=70.0, height=22.0)
-        hangar2.reparentTo(self.render)
-        hangar2.setPos(-80.0, 80.0, 1.0)
-        self.world_scenery.append(hangar2)
-
-        # Scattered Pine Trees along runway perimeter and valley floor
-        np.random.seed(42)
-        for i in range(48):
-            tx = float(np.random.uniform(-350.0, 350.0))
-            if -50.0 < tx < 50.0:
-                tx = 65.0 if tx >= 0 else -65.0
-            ty = float(np.random.uniform(-1100.0, 1100.0))
-            th = float(np.random.uniform(7.0, 14.0))
-            tree = EnvironmentGeometryBuilder.create_pine_tree(height=th)
-            tree.reparentTo(self.render)
-            tree_elevation = self.terrain_gen.get_height(tx, ty)
-            tree.setPos(tx, ty, max(1.0, float(tree_elevation)))
-            self.world_scenery.append(tree)
 
     def _bind_parameter_hotkeys(self) -> None:
         """Binds instant keyboard shortcuts for camera, physical tuning, and sandbox spawning."""
@@ -264,16 +238,16 @@ class PyAero3DSimulatorApp(ShowBase):
 
     def _get_target_pos(self) -> np.ndarray:
         if self.scenario_idx == 5:
-            return np.array([0.0, 16.0, -900.0])
+            return np.array([0.0, 16.0, 0.0])
         elif self.scenario_idx == 7:
-            return np.array([0.0, 12.0, -900.0])
+            return np.array([0.0, 10.0, 0.0])
 
         if 0 <= self.current_controlled_idx < self.state_buffer.max_entities:
             if self.state_buffer.data[self.current_controlled_idx, StateIdx.ACTIVE] > 0.5:
                 pos = self.state_buffer.data[self.current_controlled_idx, StateIdx.PX:StateIdx.PZ + 1]
                 if not (np.isnan(pos).any() or np.isinf(pos).any()):
                     return pos
-        return np.array([0.0, 10.0, -1000.0])
+        return np.array([0.0, 10.0, 0.0])
 
     def tweak_mass(self, delta_pct: float) -> None:
         self.curr_mass = max(0.1, self.curr_mass * (1.0 + delta_pct))
@@ -408,7 +382,7 @@ class PyAero3DSimulatorApp(ShowBase):
 
     def spawn_fighter_jet_airborne(self) -> int:
         theta_rad = np.radians(self.curr_theta)
-        init_pos = np.array([0.0, 1200.0, -500.0], dtype=np.float64)
+        init_pos = np.array([0.0, 150.0, 0.0], dtype=np.float64)
         init_vel = np.array([0.0, self.curr_v0 * np.sin(theta_rad), self.curr_v0 * np.cos(theta_rad)], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
@@ -434,8 +408,7 @@ class PyAero3DSimulatorApp(ShowBase):
 
     def spawn_cannon_projectile(self) -> int:
         theta_rad = np.radians(self.curr_theta)
-        ground_y = self.terrain_gen.get_height(0.0, -1200.0)
-        init_pos = np.array([0.0, ground_y + 15.0, -1200.0], dtype=np.float64)
+        init_pos = np.array([0.0, 2.0, 0.0], dtype=np.float64)
         init_vel = np.array([0.0, self.curr_v0 * np.sin(theta_rad), self.curr_v0 * np.cos(theta_rad)], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
@@ -459,7 +432,7 @@ class PyAero3DSimulatorApp(ShowBase):
         return idx
 
     def spawn_airfoil_glider(self) -> int:
-        init_pos = np.array([0.0, 1600.0, -200.0], dtype=np.float64)
+        init_pos = np.array([0.0, 200.0, 0.0], dtype=np.float64)
         init_vel = np.array([0.0, -1.5, self.curr_v0], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
@@ -483,7 +456,7 @@ class PyAero3DSimulatorApp(ShowBase):
         return idx
 
     def spawn_rocket_launch(self) -> int:
-        init_pos = np.array([300.0, 5.0, -1200.0], dtype=np.float64)
+        init_pos = np.array([0.0, 2.0, 0.0], dtype=np.float64)
         init_vel = np.array([0.0, 5.0, 0.0], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
@@ -508,7 +481,7 @@ class PyAero3DSimulatorApp(ShowBase):
         return idx
 
     def spawn_orbital_satellite(self) -> int:
-        init_pos = np.array([0.0, 3500.0, 0.0], dtype=np.float64)
+        init_pos = np.array([0.0, 1500.0, 0.0], dtype=np.float64)
         init_vel = np.array([0.0, 0.0, 180.0], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
@@ -532,12 +505,12 @@ class PyAero3DSimulatorApp(ShowBase):
         return idx
 
     def spawn_double_pendulum(self) -> int:
-        pivot_pos = np.array([0.0, 20.0, -900.0])
+        pivot_pos = np.array([0.0, 16.0, 0.0])
 
         # Floor Mounting Stand
         stand_np = SpatialReferenceBuilder.create_pendulum_stand()
         stand_np.reparentTo(self.render)
-        stand_np.setPos(0.0, -900.0, 0.0)
+        stand_np.setPos(0.0, 0.0, 0.0)
         self.scenario_props.append(stand_np)
 
         # Pivot Bearing Housing
@@ -545,7 +518,7 @@ class PyAero3DSimulatorApp(ShowBase):
             radius=0.25, length=0.6, segments=24, color=(0.95, 0.75, 0.20, 1.0), name="PivotHousing"
         )
         pivot_housing.reparentTo(self.render)
-        pivot_housing.setPos(0.0, -900.3, 20.0)
+        pivot_housing.setPos(0.0, -0.3, 16.0)
         self.scenario_props.append(pivot_housing)
 
         # Rod 1 & Bob 1
@@ -583,7 +556,7 @@ class PyAero3DSimulatorApp(ShowBase):
         return 0
 
     def spawn_cyclotron_particle(self) -> int:
-        init_pos = np.array([0.0, 30.0, -800.0], dtype=np.float64)
+        init_pos = np.array([0.0, 18.0, 0.0], dtype=np.float64)
         init_vel = np.array([50.0, 20.0, 0.0], dtype=np.float64)
 
         idx = self.state_buffer.allocate_entity(
@@ -608,29 +581,29 @@ class PyAero3DSimulatorApp(ShowBase):
 
     def spawn_spring_damper_system(self) -> int:
         """Spawns 3D viscoelastic harmonic oscillator with dynamic coil spring and weight."""
-        mount_pos = np.array([0.0, 20.0, -900.0])
+        mount_pos = np.array([0.0, 16.0, 0.0])
 
         # Floor mounting frame
         stand_np = SpatialReferenceBuilder.create_pendulum_stand()
         stand_np.reparentTo(self.render)
-        stand_np.setPos(0.0, -900.0, 0.0)
+        stand_np.setPos(0.0, 0.0, 0.0)
         self.scenario_props.append(stand_np)
 
         # Helical Spring
         self.spring_mesh_np = MeshPrimitiveBuilder.build_helical_spring(
-            radius=0.9, length=8.0, coils=9, wire_radius=0.09, color=(0.95, 0.75, 0.15, 1.0)
+            radius=0.9, length=6.0, coils=9, wire_radius=0.09, color=(0.95, 0.75, 0.15, 1.0)
         )
         self.spring_mesh_np.reparentTo(self.render)
-        self.spring_mesh_np.setPos(0.0, -900.0, 16.0)
+        self.spring_mesh_np.setPos(0.0, 0.0, 13.0)
 
         # Mass block
         self.spring_mass_np = MeshPrimitiveBuilder.build_uv_sphere(
             radius=1.4, rings=18, sectors=24, color=(0.20, 0.65, 0.95, 1.0), name="SpringMass"
         )
         self.spring_mass_np.reparentTo(self.render)
-        self.spring_mass_np.setPos(0.0, -900.0, 12.0)
+        self.spring_mass_np.setPos(0.0, 0.0, 9.0)
 
-        self.spring_y = -3.0
+        self.spring_y = -2.5
         self.spring_vy = 0.0
         self.cam_controller.set_target_scale(4.0)
         self.cam_controller.focus_target(mount_pos)
@@ -718,7 +691,7 @@ class PyAero3DSimulatorApp(ShowBase):
             l2 = self.pendulum_solver.l2
 
             # Pivot Point P0 in Panda3D coords (X, Y_depth, Z_up)
-            p0 = Point3(0.0, -900.0, 20.0)
+            p0 = self.pendulum_pivot_p3
 
             # Bob 1 position: x1 = l1 * sin(th1), z1 = -l1 * cos(th1)
             x1 = float(l1 * np.sin(th1))
@@ -752,12 +725,12 @@ class PyAero3DSimulatorApp(ShowBase):
                 self.spring_vy += acc_y * dt
                 self.spring_y += self.spring_vy * dt
 
-            mass_y = 12.0 + self.spring_y
-            self.spring_mass_np.setPos(0.0, -900.0, mass_y)
-            scale_y = max(0.2, (20.0 - mass_y) / 8.0)
+            mass_y = 9.0 + self.spring_y
+            self.spring_mass_np.setPos(0.0, 0.0, mass_y)
+            scale_y = max(0.2, (16.0 - mass_y) / 7.0)
             self.spring_mesh_np.setSz(scale_y)
-            self.spring_mesh_np.setPos(0.0, -900.0, 20.0 - 4.0 * scale_y)
-            self.trajectory_ribbon.add_point(np.array([0.0, mass_y, -900.0]))
+            self.spring_mesh_np.setPos(0.0, 0.0, 16.0 - 3.5 * scale_y)
+            self.trajectory_ribbon.add_point(np.array([0.0, mass_y, 0.0]))
 
         # 3. Update Standard Rigid Body Entities from StateBuffer
         snapshot = self.physics_thread.get_render_snapshot()

@@ -25,7 +25,8 @@ def test_pyaero3d_app_startup_and_subsystems():
 
     # Verify terrain generator
     assert app.terrain_gen.grid_res == 512
-    assert app.terrain_gen.max_height == 2400.0
+    assert app.terrain_gen.is_flat is True
+    assert app.terrain_gen.max_height == 0.0
 
     # Verify physics thread is running
     assert app.physics_thread._running is True

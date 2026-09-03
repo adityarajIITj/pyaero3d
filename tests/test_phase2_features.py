@@ -78,8 +78,10 @@ def test_god_hand_and_sandbox_spawner_integration():
 
     app = PyAero3DSimulatorApp(scenario_idx=1)
 
-    # Verify living world scenery nodes spawned
-    assert len(app.world_scenery) > 20
+    # Verify flat grey canvas and CAD grid
+    assert not app.floor_canvas.isEmpty()
+    assert not app.grid_np.isEmpty()
+    assert app.terrain_gen.is_flat is True
 
     # Verify God Hand controller initialized
     assert isinstance(app.god_hand, GodHandController)
