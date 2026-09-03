@@ -14,6 +14,7 @@ from panda3d.core import (
     WindowProperties,
     DirectionalLight,
     AmbientLight,
+    Fog,
     NodePath,
     LQuaternionf,
     Point3,
@@ -40,6 +41,7 @@ from pyaero3d.render.spatial_references import SpatialReferenceBuilder, Dynamic3
 from pyaero3d.ui.hud_overlay import FlightHUDOverlay
 from pyaero3d.ui.control_panel_3d import InViewportControlPanel3D
 from pyaero3d.controls.flight_yoke import FlightYokeController
+from pyaero3d.controls.god_hand import GodHandController
 from pyaero3d.physics.engine_thread import PhysicsEngineThread
 from pyaero3d.physics.fragmentation import FragmentationEngine
 from pyaero3d.physics.mountain_collision import MountainCollisionEngine
@@ -82,9 +84,17 @@ class PyAero3DSimulatorApp(ShowBase):
 
         self.is_paused = False
 
+        self.setBackgroundColor(0.58, 0.74, 0.94, 1.0)
+
         # Configure Camera Lens FOV
         self.camLens.setFov(75)
         self.camLens.setNearFar(0.5, 50000.0)
+
+        # Atmospheric Depth Haze Fog
+        self.fog = Fog("AtmosphericDepthHaze")
+        self.fog.setColor(0.58, 0.74, 0.94)
+        self.fog.setLinearRange(250.0, 18000.0)
+        self.render.setFog(self.fog)
 
         # 1. State Buffer Tensor
         self.state_buffer = StateBuffer(max_entities=256)
@@ -98,6 +108,10 @@ class PyAero3DSimulatorApp(ShowBase):
         self.sky_dome.reparentTo(self.render)
         self.runway = EnvironmentGeometryBuilder.create_runway_strip(elevation=1.0)
         self.runway.reparentTo(self.render)
+
+        # Living Airfield Infrastructure & Scenery
+        self.world_scenery: List[NodePath] = []
+        self._spawn_living_world_scenery()
 
         # 3. 3D Spatial Reference Gizmos (XYZ Axes, Ground Grid, Trajectory Ribbon)
         self.axes_np = SpatialReferenceBuilder.create_coordinate_axes(length=25.0)
@@ -124,7 +138,7 @@ class PyAero3DSimulatorApp(ShowBase):
             target_hz=1000.0,
         )
 
-        # 7. Dynamic Camera Controller (Supports Free View & 3D Mouse Orbit)
+        # 7. Dynamic Camera Controller (Supports True Chase & Side Profile Trajectory)
         self.cam_controller = FlightCameraController(self.camera, base_app=self)
 
         # 8. Glass Cockpit Telemetry HUD & Input Yoke
@@ -147,7 +161,10 @@ class PyAero3DSimulatorApp(ShowBase):
         self.spring_mesh_np: Optional[NodePath] = None
         self.spring_mass_np: Optional[NodePath] = None
 
-        # 10. Interactive In-Viewport 3D Control Panel
+        # 10. Interactive 3D "God Hand" Mouse Manipulation
+        self.god_hand = GodHandController(self, self.state_buffer, self.render)
+
+        # 11. Interactive In-Viewport 3D Control Panel
         self.control_panel = InViewportControlPanel3D(
             base_app=self,
             on_change_scenario=self.switch_scenario,
@@ -162,6 +179,7 @@ class PyAero3DSimulatorApp(ShowBase):
             on_toggle_axes=self.toggle_axes,
             on_toggle_grid=self.toggle_grid,
             on_toggle_trail=self.toggle_trail,
+            on_spawn_object=self.spawn_sandbox_object,
         )
 
         # Bind parameter keyboard hotkeys
@@ -185,12 +203,45 @@ class PyAero3DSimulatorApp(ShowBase):
         self.render.setLight(dlnp)
 
         alight = AmbientLight("ambient")
-        alight.setColor((0.35, 0.40, 0.50, 1.0))
+        alight.setColor((0.45, 0.48, 0.55, 1.0))
         alnp = self.render.attachNewNode(alight)
         self.render.setLight(alnp)
 
+    def _spawn_living_world_scenery(self) -> None:
+        """Spawns Airfield ATC Tower, Hangars, and Valley Pine Trees."""
+        # ATC Tower on east airfield apron
+        tower = EnvironmentGeometryBuilder.create_atc_tower()
+        tower.reparentTo(self.render)
+        tower.setPos(75.0, -100.0, 1.0)
+        self.world_scenery.append(tower)
+
+        # Hangars on west apron
+        hangar1 = EnvironmentGeometryBuilder.create_hangar(width=55.0, length=70.0, height=22.0)
+        hangar1.reparentTo(self.render)
+        hangar1.setPos(-80.0, -120.0, 1.0)
+        self.world_scenery.append(hangar1)
+
+        hangar2 = EnvironmentGeometryBuilder.create_hangar(width=55.0, length=70.0, height=22.0)
+        hangar2.reparentTo(self.render)
+        hangar2.setPos(-80.0, 80.0, 1.0)
+        self.world_scenery.append(hangar2)
+
+        # Scattered Pine Trees along runway perimeter and valley floor
+        np.random.seed(42)
+        for i in range(48):
+            tx = float(np.random.uniform(-350.0, 350.0))
+            if -50.0 < tx < 50.0:
+                tx = 65.0 if tx >= 0 else -65.0
+            ty = float(np.random.uniform(-1100.0, 1100.0))
+            th = float(np.random.uniform(7.0, 14.0))
+            tree = EnvironmentGeometryBuilder.create_pine_tree(height=th)
+            tree.reparentTo(self.render)
+            tree_elevation = self.terrain_gen.get_height(tx, ty)
+            tree.setPos(tx, ty, max(1.0, float(tree_elevation)))
+            self.world_scenery.append(tree)
+
     def _bind_parameter_hotkeys(self) -> None:
-        """Binds instant keyboard shortcuts for in-game physical parameter tuning."""
+        """Binds instant keyboard shortcuts for camera, physical tuning, and sandbox spawning."""
         self.accept("[", lambda: self.tweak_mass(-0.20))
         self.accept("]", lambda: self.tweak_mass(0.20))
         self.accept("-", lambda: self.tweak_cd(-0.05))
@@ -201,7 +252,13 @@ class PyAero3DSimulatorApp(ShowBase):
         self.accept(".", lambda: self.tweak_angle(5.0))
         self.accept("r", self.launch_or_reset)
         self.accept("p", self.toggle_pause)
-        self.accept("o", self._cycle_camera_mode)
+        self.accept("c", self._cycle_camera_mode)
+        self.accept("1", lambda: self.set_camera_mode(0))  # Chase Behind
+        self.accept("2", lambda: self.set_camera_mode(1))  # Side Profile
+        self.accept("3", lambda: self.set_camera_mode(2))  # Free View
+        self.accept("4", lambda: self.set_camera_mode(3))  # Orbit Target
+        self.accept("5", lambda: self.set_camera_mode(4))  # Cockpit
+        self.accept("g", lambda: self.spawn_sandbox_object(0)) # Spawn Crate
         self.accept("tab", self.control_panel.toggle_panel_visibility)
         self.accept("f", lambda: self.cam_controller.focus_target(self._get_target_pos()))
 
@@ -264,6 +321,7 @@ class PyAero3DSimulatorApp(ShowBase):
         self.pendulum_nodes.clear()
         if self.spring_mesh_np: self.spring_mesh_np.removeNode(); self.spring_mesh_np = None
         if self.spring_mass_np: self.spring_mass_np.removeNode(); self.spring_mass_np = None
+        if hasattr(self, "god_hand"): self.god_hand._on_grab_end()
 
         self.state_buffer.clear()
         self._spawn_preset_scenario(self.scenario_idx)
@@ -579,12 +637,74 @@ class PyAero3DSimulatorApp(ShowBase):
         print(f"[PyAero3D] Spawned 3D Spring-Damper Oscillator.")
         return 0
 
+    def spawn_sandbox_object(self, s_type: int) -> int:
+        """Drops physical sandbox objects into the world with real-time terrain collision."""
+        target_pos = self._get_target_pos()
+        spawn_phys = target_pos + np.array([float(np.random.uniform(-15.0, 15.0)), 28.0, float(np.random.uniform(-15.0, 15.0))])
+        gh = float(self.terrain_gen.get_height(spawn_phys[0], spawn_phys[2]))
+        spawn_phys[1] = max(spawn_phys[1], gh + 22.0)
+
+        if s_type == 0:  # Physics Cargo Crate
+            idx = self.state_buffer.allocate_entity(
+                entity_type=EntityType.DEBRIS_FRAGMENT,
+                mass=45.0,
+                position=spawn_phys,
+                velocity=np.array([float(np.random.uniform(-3, 3)), -2.0, float(np.random.uniform(-3, 3))]),
+                radius=1.6,
+                cd=0.85,
+                area=3.0,
+            )
+            actor = VehicleModelBuilder.create_physics_crate(size=2.2)
+        elif s_type == 1:  # Viscoelastic Bouncing Sphere
+            idx = self.state_buffer.allocate_entity(
+                entity_type=EntityType.BOUNCING_SPHERE,
+                mass=20.0,
+                position=spawn_phys,
+                velocity=np.array([float(np.random.uniform(-4, 4)), 2.0, float(np.random.uniform(-4, 4))]),
+                radius=1.2,
+                cd=0.45,
+                area=1.4,
+            )
+            actor = VehicleModelBuilder.create_bouncing_sphere()
+        elif s_type == 2:  # Target Quadrotor Drone
+            idx = self.state_buffer.allocate_entity(
+                entity_type=EntityType.QUADROTOR_DRONE,
+                mass=12.0,
+                position=spawn_phys,
+                velocity=np.array([0.0, 0.0, 10.0]),
+                radius=2.0,
+                cd=0.25,
+                area=0.8,
+            )
+            actor = VehicleModelBuilder.create_quadrotor_drone()
+        elif s_type == 3:  # Artillery Cannon Shell
+            idx = self.state_buffer.allocate_entity(
+                entity_type=EntityType.CANNON_PROJECTILE,
+                mass=18.0,
+                position=spawn_phys,
+                velocity=np.array([0.0, 35.0, 95.0]),
+                radius=0.9,
+                cd=0.28,
+                area=0.08,
+            )
+            actor = VehicleModelBuilder.create_cannon_projectile()
+        else:
+            return -1
+
+        actor.reparentTo(self.render)
+        self.actor_nodes[idx] = actor
+        print(f"[PyAero3D] Spawned Sandbox Object #{s_type} (Entity #{idx}) into 3D world.")
+        return idx
+
     def _render_frame_update(self, task):
         dt = globalClock.getDt()
         if dt > 0.1: dt = 0.016  # Clamp timestep spikes
 
-        # Update flight controls
+        # Update flight yoke controls
         self.yoke.update(dt)
+
+        # Update 3D God Hand interactive mouse spring pulling
+        self.god_hand.update(dt)
 
         # 1. Update Double Pendulum 3D Physical Articulation
         if self.scenario_idx == 5 and len(self.pendulum_nodes) == 4:
@@ -657,7 +777,10 @@ class PyAero3DSimulatorApp(ShowBase):
 
             if idx not in self.actor_nodes:
                 if ent_type == EntityType.DEBRIS_FRAGMENT:
-                    actor_np = VehicleModelBuilder.create_debris_shard()
+                    if row[StateIdx.AREA] > 2.0:
+                        actor_np = VehicleModelBuilder.create_physics_crate(size=2.2)
+                    else:
+                        actor_np = VehicleModelBuilder.create_debris_shard()
                 elif ent_type == EntityType.FIXED_WING_JET:
                     actor_np = VehicleModelBuilder.create_fighter_jet()
                 elif ent_type == EntityType.QUADROTOR_DRONE:

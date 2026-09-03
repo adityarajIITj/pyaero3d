@@ -31,6 +31,7 @@ class InViewportControlPanel3D:
         on_toggle_axes: Callable[[], None],
         on_toggle_grid: Callable[[], None],
         on_toggle_trail: Callable[[], None],
+        on_spawn_object: Optional[Callable[[int], None]] = None,
     ):
         self.base = base_app
         self.on_change_scenario = on_change_scenario
@@ -45,6 +46,7 @@ class InViewportControlPanel3D:
         self.on_toggle_axes = on_toggle_axes
         self.on_toggle_grid = on_toggle_grid
         self.on_toggle_trail = on_toggle_trail
+        self.on_spawn_object = on_spawn_object
 
         self.is_minimized = False
         self.dock_side = "right"  # "right" or "left"
@@ -269,7 +271,7 @@ class InViewportControlPanel3D:
         y_cam = y_act - 0.14
         DirectLabel(
             parent=self.frame,
-            text="CAMERA MODES (O)",
+            text="CAMERA MODES (1-5, C)",
             text_scale=0.024,
             text_fg=(0.8, 0.85, 0.9, 1),
             frameColor=(0, 0, 0, 0),
@@ -277,29 +279,70 @@ class InViewportControlPanel3D:
             text_align=TextNode.ALeft,
         )
 
-        cam_modes = [("Free Cam", 0), ("Orbit Target", 1), ("Chase Cam", 2), ("Cockpit", 3)]
+        cam_modes = [
+            ("Chase Behind (1)", 0),
+            ("Side Profile (2)", 1),
+            ("Free Flight (3)", 2),
+            ("Orbit Target (4)", 3),
+            ("Cockpit (5)", 4),
+        ]
         for i, (cname, cmode) in enumerate(cam_modes):
             col_idx = i % 2
             row_idx = i // 2
             bx = -0.18 + col_idx * 0.36
-            by = y_cam - 0.050 - row_idx * 0.058
+            by = y_cam - 0.045 - row_idx * 0.052
             DirectButton(
                 parent=self.frame,
                 text=cname,
-                text_scale=0.023,
+                text_scale=0.021,
                 text_fg=txt_fg,
                 frameColor=btn_col,
-                frameSize=(-0.16, 0.16, -0.022, 0.030),
+                frameSize=(-0.17, 0.17, -0.020, 0.028),
                 pos=(bx, 0.0, by),
                 command=self.on_change_cam_mode,
                 extraArgs=[cmode],
             )
 
-        # 6. 3D Visual Reference Toggles
-        y_vis = y_cam - 0.17
+        # 6. Interactive Sandbox & Spawner (Track 1)
+        y_spwn = y_cam - 0.18
         DirectLabel(
             parent=self.frame,
-            text="VISUAL AIDS",
+            text="INTERACTIVE SANDBOX (G)",
+            text_scale=0.024,
+            text_fg=accent_col,
+            frameColor=(0, 0, 0, 0),
+            pos=(-0.34, 0.0, y_spwn),
+            text_align=TextNode.ALeft,
+        )
+
+        spwn_items = [
+            ("Spawn Crate", 0),
+            ("Spawn Sphere", 1),
+            ("Spawn Drone", 2),
+            ("Spawn Shell", 3),
+        ]
+        for i, (sname, s_type) in enumerate(spwn_items):
+            col_idx = i % 2
+            row_idx = i // 2
+            bx = -0.18 + col_idx * 0.36
+            by = y_spwn - 0.042 - row_idx * 0.048
+            DirectButton(
+                parent=self.frame,
+                text=sname,
+                text_scale=0.020,
+                text_fg=txt_fg,
+                frameColor=(0.18, 0.26, 0.35, 0.95),
+                frameSize=(-0.17, 0.17, -0.018, 0.025),
+                pos=(bx, 0.0, by),
+                command=self._on_click_spawn,
+                extraArgs=[s_type],
+            )
+
+        # 7. 3D Visual Reference Toggles
+        y_vis = y_spwn - 0.125
+        DirectLabel(
+            parent=self.frame,
+            text="VISUAL AIDS & GOD HAND",
             text_scale=0.024,
             text_fg=(0.8, 0.85, 0.9, 1),
             frameColor=(0, 0, 0, 0),
@@ -307,19 +350,29 @@ class InViewportControlPanel3D:
             text_align=TextNode.ALeft,
         )
         DirectButton(
-            parent=self.frame, text="3D Axes", text_scale=0.022, text_fg=txt_fg,
-            frameColor=btn_col, frameSize=(-0.10, 0.10, -0.02, 0.025),
-            pos=(-0.24, 0.0, y_vis - 0.045), command=self.on_toggle_axes,
+            parent=self.frame, text="3D Axes", text_scale=0.021, text_fg=txt_fg,
+            frameColor=btn_col, frameSize=(-0.10, 0.10, -0.018, 0.024),
+            pos=(-0.24, 0.0, y_vis - 0.042), command=self.on_toggle_axes,
         )
         DirectButton(
-            parent=self.frame, text="3D Grid", text_scale=0.022, text_fg=txt_fg,
-            frameColor=btn_col, frameSize=(-0.10, 0.10, -0.02, 0.025),
-            pos=(0.0, 0.0, y_vis - 0.045), command=self.on_toggle_grid,
+            parent=self.frame, text="3D Grid", text_scale=0.021, text_fg=txt_fg,
+            frameColor=btn_col, frameSize=(-0.10, 0.10, -0.018, 0.024),
+            pos=(0.0, 0.0, y_vis - 0.042), command=self.on_toggle_grid,
         )
         DirectButton(
-            parent=self.frame, text="Trail", text_scale=0.022, text_fg=txt_fg,
-            frameColor=btn_col, frameSize=(-0.10, 0.10, -0.02, 0.025),
-            pos=(0.24, 0.0, y_vis - 0.045), command=self.on_toggle_trail,
+            parent=self.frame, text="Trail", text_scale=0.021, text_fg=txt_fg,
+            frameColor=btn_col, frameSize=(-0.10, 0.10, -0.018, 0.024),
+            pos=(0.24, 0.0, y_vis - 0.042), command=self.on_toggle_trail,
+        )
+
+        DirectLabel(
+            parent=self.frame,
+            text="God Hand: Ctrl+Click & Drag to pull",
+            text_scale=0.020,
+            text_fg=(0.7, 0.9, 0.7, 1),
+            frameColor=(0, 0, 0, 0),
+            pos=(0.0, 0.0, y_vis - 0.082),
+            text_align=TextNode.ACenter,
         )
 
         # Minimized Floating Bar (Slim top widget)
@@ -367,3 +420,9 @@ class InViewportControlPanel3D:
         self.lbl_cd["text"] = f"Drag Cd: {cd:.3f}"
         self.lbl_thrust["text"] = f"Thrust: {thrust:.0f} N"
         self.lbl_angle["text"] = f"Angle: {angle_deg:.1f}°"
+
+    def _on_click_spawn(self, s_type: int) -> None:
+        if self.on_spawn_object:
+            self.on_spawn_object(s_type)
+        elif hasattr(self.base, "spawn_sandbox_object"):
+            self.base.spawn_sandbox_object(s_type)

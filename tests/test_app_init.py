@@ -42,3 +42,6 @@ def test_pyaero3d_app_startup_and_subsystems():
     # Stop physics thread and clean up
     app.physics_thread.stop()
     app.destroy()
+    import builtins
+    if hasattr(builtins, "base"):
+        del builtins.base

@@ -578,4 +578,42 @@ class VehicleModelBuilder:
             radius=1.2, rings=20, sectors=28, color=(0.95, 0.75, 0.10, 1.0), name="BouncingSphere"
         )
 
+    @staticmethod
+    def create_physics_crate(size: float = 2.0) -> NodePath:
+        """Builds an industrial shipping crate with surface normals."""
+        parent = NodePath("PhysicsCrate")
+        half = size * 0.5
+        vdata = GeomVertexData("CrateMesh", GeomVertexFormat.getV3n3c4(), Geom.UHDynamic)
+        v_writer = GeomVertexWriter(vdata, "vertex")
+        n_writer = GeomVertexWriter(vdata, "normal")
+        c_writer = GeomVertexWriter(vdata, "color")
+        tris = GeomTriangles(Geom.UHDynamic)
+
+        col = (0.72, 0.52, 0.28, 1.0)
+        faces = [
+            ([(half, half, -half), (-half, half, -half), (-half, half, half), (half, half, half)], (0, 1, 0)),
+            ([(-half, -half, -half), (half, -half, -half), (half, -half, half), (-half, -half, half)], (0, -1, 0)),
+            ([(-half, -half, half), (half, -half, half), (half, half, half), (-half, half, half)], (0, 0, 1)),
+            ([(-half, half, -half), (half, half, -half), (half, -half, -half), (-half, -half, -half)], (0, 0, -1)),
+            ([(half, -half, -half), (half, half, -half), (half, half, half), (half, -half, half)], (1, 0, 0)),
+            ([(-half, half, -half), (-half, -half, -half), (-half, -half, half), (-half, half, half)], (-1, 0, 0)),
+        ]
+        v_idx = 0
+        for quad_verts, norm in faces:
+            for (x, y, z) in quad_verts:
+                v_writer.addData3(x, y, z)
+                n_writer.addData3(*norm)
+                c_writer.addData4(*col)
+            tris.addVertices(v_idx, v_idx + 1, v_idx + 2)
+            tris.addVertices(v_idx, v_idx + 2, v_idx + 3)
+            v_idx += 4
+
+        geom = Geom(vdata)
+        geom.addPrimitive(tris)
+        node = GeomNode("CrateGeomNode")
+        node.addGeom(geom)
+        np_node = NodePath(node)
+        np_node.reparentTo(parent)
+        return parent
+
     create_quadrotor = create_quadrotor_drone
